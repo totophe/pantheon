@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Breadcrumbs } from './components/Breadcrumbs';
 import { CommandPalette } from './components/CommandPalette';
+import { NoData } from './components/NoData';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { PageHeader } from './components/ui';
@@ -28,6 +29,8 @@ export function App() {
   }, []);
 
   const known = vm.isHome || vm.isTopo || vm.isPower || vm.isList || vm.isObj;
+  // Settings pages work without an inventory; everything else has nothing to show.
+  const empty = vm.noData && state.route !== 'sources' && state.route !== 'notifications';
 
   return (
     <div className="app">
@@ -36,12 +39,13 @@ export function App() {
         <Sidebar vm={vm} expanded={state.side} />
         <main className="main">
           <Breadcrumbs crumbs={vm.crumbs} />
-          {vm.isHome && <HomePage vm={vm} />}
-          {vm.isTopo && <TopologyPage vm={vm} />}
-          {vm.isPower && <PowerPage vm={vm} />}
-          {vm.isList && <ListPage page={vm.page} />}
-          {vm.isObj && <ObjectPage o={vm.o} rangeLabel={vm.rangeLabel} />}
-          {!known && (
+          {empty && <NoData vm={vm} />}
+          {!empty && vm.isHome && <HomePage vm={vm} />}
+          {!empty && vm.isTopo && <TopologyPage vm={vm} />}
+          {!empty && vm.isPower && <PowerPage vm={vm} />}
+          {!empty && vm.isList && <ListPage page={vm.page} />}
+          {!empty && vm.isObj && <ObjectPage o={vm.o} rangeLabel={vm.rangeLabel} />}
+          {!empty && !known && (
             <div className="page">
               <PageHeader title="Not found" desc="Pantheon does not know this object." />
               <div><button type="button" className="btn btn-md btn-secondary" onClick={vm.goHome}>Back to overview</button></div>

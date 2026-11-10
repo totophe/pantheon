@@ -314,3 +314,13 @@ button.rel-item:hover { background: var(--raised); }
   .main { padding: 16px 16px 28px; }
   .topbar { padding: 10px 16px; }
 }
+
+/* ---------- mock data switch & empty state ---------- */
+.switch { display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 0; font-size: 12px; color: var(--muted); }
+.switch[aria-checked='true'] { color: var(--text); }
+.switch-track { width: 30px; height: 18px; border-radius: 9px; padding: 2px; background: var(--underline); display: flex; justify-content: flex-start; flex: none; }
+.switch-track > span { width: 14px; height: 14px; border-radius: 50%; background: var(--text); }
+.switch[aria-checked='true'] .switch-track { background: var(--accent); justify-content: flex-end; }
+.no-data { align-items: flex-start; gap: 12px; padding: 28px; max-width: 640px; }
+.no-data p { font-size: 14px; line-height: 1.55; color: var(--text-2); }
+.no-data-actions { display: flex; flex-wrap: wrap; gap: 8px; }

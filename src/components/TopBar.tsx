@@ -28,6 +28,10 @@ export function TopBar({ vm }: { vm: ViewModel }) {
 
       <div className="topbar-right">
         <Segmented label="Time range" items={vm.ranges} inset />
+        <button type="button" role="switch" aria-checked={vm.mock.on} className="switch" onClick={vm.mock.toggle} title="Show the demo home lab instead of live sources">
+          <span className="switch-track"><span /></span>
+          Mock data
+        </button>
         <button type="button" className="sources-status" onClick={vm.goSources}>
           <Dot color={vm.srcDot} size={6} />
           {vm.srcLabel}

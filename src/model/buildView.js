@@ -1,15 +1,14 @@
 /**
  * View model for the Pantheon UI.
  *
- * Ported from the design prototype: it holds the demo inventory (sites, hosts,
- * guests, containers, VLANs, VPS, UPS…) and turns the UI state into everything
- * the React components render. Colours for status-driven values are computed
- * here; static theme colours live in src/styles.css.
+ * Ported from the design prototype. It assembles one inventory (sites, hosts,
+ * guests, containers, VLANs, VPS, UPS…) from the per-integration datasets in
+ * `self.data` and turns it, with the UI state, into everything the React
+ * components render. Colours for status-driven values are computed here;
+ * static theme colours live in src/styles.css.
  *
  * `self` is the store (src/model/store.ts): `self.state`, `self.setState()`,
- * `self.nav()`, plus timer slots (`t`, `iv`, `ivU`).
- *
- * Replace the registry below with real data sources when the backend exists.
+ * `self.nav()`, `self.data`, `self.integrations`, plus timer slots (`t`, `iv`, `ivU`).
  */
 export function buildView(self) {
     var st = self.state;
@@ -21,15 +20,18 @@ export function buildView(self) {
     var go = function (id) { return function () { self.nav('obj', id); }; };
     var to = function (r) { return function () { self.nav(r); }; };
     var full = '1 / -1', one = 'auto';
+    var LV = { ok: OK, warn: WARN, crit: CRIT, info: INFO, mute: MUTE, text: TXT };
+    var lv = function (x) { return LV[x] || x; };
+    var TONE = { warn: '#5A4A1F', crit: '#6B2A2A', ok: '#2F5A3A' };
 
     // ---------- card builders ----------
     var barColor = function (p, w, c) { return p >= (c || 95) ? CRIT : (p >= (w || 80) ? WARN : OK); };
-    var kv = function (t, pairs, gc) { return { type: 'kv', t: t, gc: gc || one, items: pairs.map(function (p) { return { k: p[0], v: p[1], c: p[2] || TXT }; }) }; };
-    var bars = function (t, arr, gc) { return { type: 'bars', t: t, gc: gc || one, items: arr.map(function (b) { var c = b[3] || barColor(b[1]); return { l: b[0], w: Math.min(100, b[1]) + '%', v: b[2] || (b[1] + '%'), c: c, tc: c === OK ? TXT : c }; }) }; };
+    var kv = function (t, pairs, gc) { return { type: 'kv', t: t, gc: gc || one, items: pairs.map(function (p) { return { k: p[0], v: p[1], c: lv(p[2]) || TXT }; }) }; };
+    var bars = function (t, arr, gc) { return { type: 'bars', t: t, gc: gc || one, items: arr.map(function (b) { var c = lv(b[3]) || barColor(b[1]); return { l: b[0], w: Math.min(100, b[1]) + '%', v: b[2] || (b[1] + '%'), c: c, tc: c === OK ? TXT : c }; }) }; };
     var temps = function (t, arr, gc) { return { type: 'bars', t: t, gc: gc || one, items: arr.map(function (b) { var c = b[1] >= b[3] ? CRIT : (b[1] >= b[2] ? WARN : (b[1] / b[2] < 0.68 ? '#2E7DD1' : OK)); return { l: b[0], w: Math.min(100, Math.round(b[1] / b[3] * 100)) + '%', v: b[1] + ' °C', c: c, tc: c === WARN || c === CRIT ? c : TXT }; }) }; };
     var list = function (t, items, gc) { return { type: 'list', t: t, gc: gc || one, items: items }; };
     var R = function (id, s, r, rc) { return { ref: id, s: s || '', r: r || '', rc: rc }; };
-    var I = function (t, s, r, c, rc) { return { t: t, s: s || '', r: r || '', c: c || OK, rc: rc }; };
+    var I = function (t, s, r, c, rc) { return { t: t, s: s || '', r: r || '', c: lv(c) || OK, rc: lv(rc) }; };
     var note = function (t, text, c) { return { type: 'note', t: t, text: text, gc: full, bd: (c || '#2A313C') }; };
     var chart = function (t, base, amp, unit, warn, seed) {
       var lo = 0, hi = Math.max(warn || 0, base + amp * 2) * 1.15 || 100;
@@ -41,312 +43,182 @@ export function buildView(self) {
     };
     var fans = function (t, arr) { return { type: 'fans', t: t, gc: one, items: arr.map(function (f) { return { l: f[0], v: f[1] + ' rpm', dur: (Math.max(0.12, 300 / f[1])).toFixed(2) + 's' }; }) }; };
 
+    // ---------- data ----------
+    // One dataset per integration (src/integrations), or null while that source has delivered nothing.
+    var D = self.data || {};
+    var feed = function (key) { var out = []; Object.keys(D).forEach(function (k) { if (D[k] && D[k][key]) out = out.concat(D[k][key]); }); return out; };
+    var noteOf = function (n) { return { type: 'note', t: n.t, text: n.text, gc: full, bd: TONE[n.tone] || '#2A313C', btn: n.action }; };
+    var nb = D.netbox || {};
+
     // ---------- object registry ----------
     var O = {};
     var add = function (id, o) { o.id = id; O[id] = o; return o; };
     var stOf = function (k) { return ST[k]; };
 
-    // Sites
-    add('home', { type: 'Site', ab: 'HOME', name: 'Home lab', site: 'home', st: st.onBatt ? 'crit' : (M && K ? 'ok' : 'warn'), sub: 'olympus-cluster · UDM Pro Max · DIGI XGS-PON + 5G',
-      tabs: {
-        Overview: [bars('Site health', [['Hosts healthy', M ? 60 : 40, M ? '3 / 5' : '2 / 5', M ? OK : WARN], ['WAN usage', 38, '3.8 / 10 Gbps'], ['Site Magic latency', 18, '18 ms', OK]]),
-          kv('Facts', [['Gateway', 'UDM Pro Max'], ['VLANs', '1 · 10 · 30 · 70 · 80 · 95'], ['Clients', '63'], ['Rack', '16U · basement']])],
-        Uplinks: [list('Internet uplinks', [I('DIGI · XGS-PON 10G', 'PPPoE · LuLeey SFP stick', 'ACTIVE · 4 ms', OK, OK), I('5G SIM', '€5/month · tested Sun', 'STANDBY', MUTE)], full)],
-        Devices: [list('Infrastructure', [R('udm'), R('agg'), R('access'), R('olympus'), R('prometheus'), R('kronos'), R('delphi'), R('alexandria'), R('hyperion')], full)]
-      },
-      rel: [['Linked sites', [R('siteb', 'Site Magic · 18 ms')]], ['Edge providers', [R('ovh'), R('quicksrv'), R('scaleway'), R('cloudflare')]]] });
-    add('siteb', { type: 'Site', ab: 'B', name: 'Site B', site: 'b', st: 'ok', sub: 'UDM Pro SE · Mobile Vikings FTTH · 10.200.0.0/24',
-      tabs: {
-        Overview: [bars('Site health', [['Synology volume', 61], ['Site Magic latency', 18, '18 ms', OK], ['WAN usage', 22, '220 Mbps']]),
-          kv('Facts', [['Gateway', 'UDM Pro SE'], ['Uplink', 'Mobile Vikings · single', WARN], ['VLAN', '200'], ['Clients', '3']]),
-          note('Single uplink', 'Site B has no failover. If Mobile Vikings drops, the nightly Atlas → Synology replication fails until it is back.', '#5A4A1F')],
-        Uplinks: [list('Internet uplinks', [I('Mobile Vikings · FTTH', 'single uplink', 'ACTIVE · 7 ms', OK, OK)], full)],
-        Devices: [list('Devices', [R('udmse'), R('synology'), R('vlan200')], full)]
-      },
-      rel: [['Linked sites', [R('home', 'Site Magic · 18 ms')]], ['Data flows in', [R('atlas', 'rsync nightly → atlas-offsite')]]] });
-
-    // Network devices
-    var netdev = function (id, name, site, sub, facts, metrics, rel) {
-      return add(id, { type: 'Network device', ab: 'NET', name: name, site: site, st: 'ok', sub: sub,
-        tabs: { Overview: [bars('Load', metrics), kv('Facts', facts)], Events: [list('Events', [I('Firmware check', 'up to date', 'Sun', OK)], full)] }, rel: rel });
-    };
-    netdev('udm', 'UDM Pro Max', 'home', 'Home gateway · firewall · 10.1.0.1', [['VLANs', '6 active · 2 planned'], ['Clients', '63'], ['IDS events (24 h)', '2'], ['Site Magic', 'Site B · up']], [['CPU', 24], ['Memory', 61], ['WAN', 51, '5.1 / 10 Gbps']], [['Site', [R('home')]], ['Downstream', [R('agg'), R('access')]]]);
-    netdev('agg', 'USW-Aggregation', 'home', '10 GbE core · 8× SFP+', [['Ports up', '5 / 8'], ['Errors (24 h)', '0'], ['Temp', '48 °C']], [['Peak port load', 34]], [['Upstream', [R('udm')]], ['Connected', [R('olympus', 'port 3'), R('prometheus', 'port 4'), R('kronos', 'port 5'), R('delphi', 'port 6'), R('alexandria', 'port 7')]]]);
-    netdev('access', 'Access switch', 'home', '1 GbE · PoE · clients & Pis', [['Sparta', 'online'], ['hestia-rpi', 'Pi-hole secondary'], ['office-hifi', 'AirPlay · idle'], ['Other clients', '11']], [['PoE budget', 22, '22 / 100 W']], [['Upstream', [R('udm')]]]);
-    netdev('udmse', 'UDM Pro SE', 'b', 'Site B gateway · 16-port PoE', [['VLAN', '200'], ['Clients', '3'], ['Site Magic', 'Home lab · 18 ms']], [['CPU', 11], ['Memory', 47], ['PoE budget', 8, '15 / 180 W']], [['Site', [R('siteb')]], ['Connected', [R('synology')]]]);
-
-    // Hosts
-    var host = function (id, o) {
-      o.type = o.type || 'Host'; o.ab = o.ab || 'HOST';
-      o.tabs = { Overview: o.ov, Metrics: o.metrics || [], Hardware: o.hw || [], Guests: o.guests ? [list('Guests', o.guests, full)] : [], Network: o.net || [], Events: o.events || [], 'Asset & CMDB': o.asset || [] };
-      return add(id, o);
-    };
-    var assetCard = function (model) { return kv('Physical asset (ITAM)', [['Model', model], ['Serial', '[SERIAL]'], ['Purchased', '[DATE] · [SUPPLIER]'], ['Warranty until', '[DATE]'], ['Location', 'Home lab · rack U[?]']]); };
-    host('olympus', { name: 'Olympus', site: 'home', st: M ? 'ok' : 'warn', sub: 'srv-prox-01 · 10.30.0.11 · Minisforum MS-01 · cluster master',
-      ov: [bars('Resources', [['CPU', 38], ['Memory', M ? 73 : 91, M ? '73% · 46.7 / 64 GB' : '91% · 58.2 / 64 GB'], ['local-nvme', 64]]),
-        kv('Facts', [['CPU', 'i9-13900H · 20 threads'], ['Memory', '64 GB DDR5'], ['Proxmox', 'VE 8 · quorum 4 / 4'], ['Uptime', '23 d 4 h']])].concat(M ? [] : [{ type: 'note', t: 'Memory pressure · 118% allocated', text: 'Guests are configured for 75.5 GB on a 64 GB host. Ballooning is reclaiming RAM from apollo. Prometheus has 26 GB free: moving icarus there brings Olympus back to ~73%.', gc: full, bd: '#5A4A1F', btn: ['Live-migrate icarus → Prometheus', 'migrate'] }]),
-      metrics: [chart('CPU', 38, 8, '%', 0, 1), chart('Memory', M ? 73 : 91, 1.5, '%', 90, 2), chart('Network', 1.8, 0.6, ' Gbps', 0, 3), chart('Package temp', 71, 3, ' °C', 90, 4)],
-      hw: [temps('Temperatures', [['CPU package', 71, 90, 100], ['P-cores (hottest)', 78, 90, 100], ['E-cores', 66, 90, 100], ['DDR5 SO-DIMM', 54, 75, 85], ['NVMe 1 · local-nvme', 52, 65, 75], ['X710 SFP+', 58, 80, 90]]),
-        fans('Fans', [['CPU blower', 3200], ['SSD fan', 2600]]), kv('Power', [['At the wall', '72 W'], ['CPU package', '38 W'], ['Source', 'Home Assistant plug']]),
-        list('Drives · SMART', [I('NVMe 1 · local-nvme', '9 120 h', 'PASSED · 52 °C'), I('NVMe 2', '9 118 h', 'PASSED · 48 °C'), I('NVMe 3 · boot', '9 118 h', 'PASSED · 45 °C')])],
-      guests: [R('apollo'), R('hermes')].concat(M ? [] : [R('icarus')]).concat([R('labk3s'), R('pihole'), R('gitea'), R('tailscale'), R('caddy'), R('monitoring')]),
-      net: [list('Interfaces', [I('vmbr0 · X710 port 1', 'trunk · VLAN 1, 30, 70, 95', '10 GbE · 1.8 Gbps'), I('vmbr1 · 2.5 GbE', 'corosync ring', '2.5 GbE')], full)],
-      events: [list('Events', [I('Memory crossed 90%', 'Proxmox API', '10:24', M ? MUTE : WARN), I('vzdump · 11 guests · OK', 'backup', '03:12'), I('Kernel 6.8 installed · reboot pending', 'apt', 'Mon', INFO)], full)],
-      asset: [kv('CMDB record (NetBox)', [['Role', 'Proxmox node'], ['Cluster', 'olympus-cluster'], ['Primary IP', '10.30.0.11'], ['Mgmt IP', '10.1.0.21 (should be VLAN 5)', WARN]]), assetCard('Minisforum MS-01')],
-      rel: [['Connected to', [R('agg', 'port 3 · 10 GbE')]], ['Depends on', [R('atlas', 'NFS nexus · chronicles')]], ['Edge tunnels in', [R('r2d2'), R('c3po'), R('k2so')]], ['Services', [R('svc-media'), R('svc-dns'), R('svc-ingress')]]] });
-    host('prometheus', { name: 'Prometheus', site: 'home', st: 'ok', sub: 'srv-prox-02 · 10.30.0.12 · i5-13500 · RTX A2000',
-      ov: [bars('Resources', [['CPU', 22], ['Memory', M ? 76 : 58, M ? '76% · +12 GB icarus' : '58%'], ['GPU · A2000', 41]]), kv('Facts', [['CPU', 'i5-13500 · turbo off'], ['Memory', '64 GB DDR4'], ['GPU', 'RTX A2000 6 GB']])],
-      metrics: [chart('CPU', 22, 6, '%', 0, 5), chart('GPU', 41, 12, '%', 0, 6)],
-      hw: [temps('Temperatures', [['CPU package', 54, 85, 100], ['RTX A2000', 61, 83, 90], ['NVMe', 44, 65, 75]]), fans('Fans', [['CPU', 1100], ['Case', 900]]), kv('Power', [['At the wall', '96 W']])],
-      guests: [R('aurora'), R('hephaestus'), R('ocr')].concat(M ? [R('icarus', 'migrated just now')] : []),
-      events: [list('Events', [I('3 container image updates', 'registry check', 'Mon', INFO)], full)],
-      asset: [assetCard('Custom · i5-13500')], rel: [['Connected to', [R('agg', 'port 4')]], ['Services', [R('svc-dev'), R('svc-ai')]], ['Edge tunnels in', [R('chopper', 'VLAN 70')]]] });
-    host('kronos', { name: 'Kronos', site: 'home', st: st.onBatt ? 'crit' : 'ok', sub: 'Dell Precision T5610 · 2× Xeon · RTX 5060 Ti + A2000',
-      ov: [bars('Resources', [['CPU', 9], ['Memory', 34], ['GPU · 5060 Ti', 31]]), kv('Facts', [['Ollama', '2 instances'], ['Models', 'qwen3 · nomic-embed'], ['Power', '142 W']])],
-      hw: [temps('Temperatures', [['CPU 0', 48, 80, 90], ['CPU 1', 51, 80, 90], ['RTX 5060 Ti', 58, 83, 90]]), fans('Fans', [['Front', 800], ['Rear', 850]])],
-      guests: [R('ollama-a'), R('ollama-b')], asset: [assetCard('Dell Precision T5610')], rel: [['Connected to', [R('agg', 'port 5')]], ['Services', [R('svc-ai')]]] });
-    host('delphi', { name: 'Delphi', site: 'home', st: st.onBatt ? 'crit' : 'warn', sub: 'Inference · i5-13500T · 2× RTX 3090',
-      ov: [bars('Resources', [['GPU 0 load', 94, '94%', OK], ['VRAM', 88, '42 / 48 GB'], ['CPU', 18]]), kv('Facts', [['Engine', 'vLLM tensor-parallel'], ['Throughput', '38 tok/s'], ['Power', '762 W']]),
-        { type: 'note', t: 'GPU 1 memory at 101 °C', text: 'GPU 1 breathes air already heated by GPU 0. GDDR6X throttles near 110 °C; sustained 100 °C+ shortens its life. A riser to space the cards or a 300 W power cap usually costs under 5% tokens/s.', gc: full, bd: '#5A4A1F' }],
-      metrics: [chart('GPU 1 temp', 83, 2, ' °C', 83, 7), chart('Tokens/s', 38, 6, '', 0, 8)],
-      hw: [temps('Temperatures', [['GPU 0 core', 76, 83, 90], ['GPU 0 VRAM junction', 92, 100, 110], ['GPU 1 core', 83, 83, 90], ['GPU 1 VRAM junction', 101, 100, 110], ['CPU', 58, 85, 100], ['NVMe', 49, 65, 75]], full),
-        fans('Fans', [['GPU 0', 1950], ['GPU 1', 2400], ['Front', 1400], ['Rear', 1300]]), kv('Power', [['At the wall', '762 W'], ['GPU 0 / 1', '340 / 348 W'], ['Energy today', '9.4 kWh']])],
-      guests: [R('vllm')], asset: [assetCard('Custom · 2× RTX 3090')], rel: [['Connected to', [R('agg', 'port 6')]], ['Services', [R('svc-ai')]]] });
-    host('alexandria', { name: 'Alexandria', site: 'home', st: 'warn', sub: 'TrueNAS Scale · X9SRI-F · 128 GB ECC',
-      ov: [bars('Resources', [['Pool Atlas', 82, '82% · 65 / 80 TB'], ['ARC hit rate', 96, '96%', OK], ['CPU', 12]]), kv('Facts', [['Pool', 'Atlas · RAIDZ-2 · 6 × 20 TB'], ['SLOG / L2ARC', 'Optane P4800X'], ['Last scrub', '6 d ago · 0 errors']])],
-      metrics: [chart('Pool used', 82, 0.5, '%', 80, 9), chart('NFS throughput', 640, 180, ' MB/s', 0, 10)],
-      hw: [temps('Temperatures', [['Exos bay 1', 36, 45, 55], ['Exos bay 2', 37, 45, 55], ['Exos bay 3', 39, 45, 55], ['Exos bay 4', 46, 45, 55], ['Exos bay 5', 38, 45, 55], ['Exos bay 6', 36, 45, 55], ['CPU', 52, 75, 85], ['HBA · LSI', 61, 70, 80], ['Optane', 44, 65, 70]], full),
-        fans('Fans · IPMI Standard', [['FAN1 CPU', 1100], ['FAN2 front', 900], ['FAN3 front', 900], ['FAN4 rear', 1000]]), kv('Power (IPMI)', [['System', '168 W'], ['12 V', '12.06 V'], ['5 V', '5.02 V'], ['3.3 V', '3.31 V']])],
-      guests: [R('atlas', 'pool'), I('garage', 'TrueNAS app · S3', 'running')],
-      asset: [assetCard('Supermicro X9SRI-F · Thermaltake')], rel: [['Connected to', [R('agg', 'port 7 · 10 GbE')]], ['Pools', [R('atlas')]], ['Replicates to', [R('synology', 'Site B · nightly')]]] });
-    host('hyperion', { name: 'Hyperion', site: 'home', st: 'plan', sub: 'srv-prox-03 · planned · shared dev platform',
-      ov: [kv('Declared in NetBox', [['CPU', 'i5-13500'], ['Board', 'B760M DS3H DDR4 · to order'], ['Memory', '2 × 32 GB (from Sparta)'], ['NIC', '82599ES dual SFP+'], ['Role', 'PostgreSQL · Garage · dev services']], full)],
-      rel: [['Will connect to', [R('agg')]], ['Services', [R('svc-dev')]]] });
-    host('synology', { name: 'Synology NAS', site: 'b', st: 'ok', sub: 'Site B · DSM · SHR-2 · 10.200.0.10',
-      ov: [bars('Resources', [['Volume', 61], ['CPU', 8], ['Memory', 34]]), kv('Facts', [['Share', '/volume1/atlas-offsite'], ['Snapshots', '30 d retention'], ['Last replication', 'today 02:47 · OK', OK]])],
-      hw: [temps('Temperatures', [['Disk 1', 34, 45, 55], ['Disk 2', 35, 45, 55], ['Disk 3', 35, 45, 55], ['Disk 4', 34, 45, 55], ['System', 41, 60, 70]]), fans('Fans', [['System', 1050]])],
-      asset: [assetCard('Synology')], rel: [['Site', [R('siteb')]], ['Receives from', [R('atlas', 'rsync nightly')]]] });
-
-    // Pools
-    add('atlas', { type: 'Pool', ab: 'POOL', name: 'Atlas', site: 'home', st: 'warn', sub: 'alexandria · ZFS RAIDZ-2 · 6 × 20 TB',
-      tabs: { Overview: [bars('Capacity', [['Used', 82, '65 / 80 TB'], ['Projected at 85%', 30, 'in ~9 days', WARN]]), kv('Health', [['State', 'ONLINE'], ['Last scrub', '6 d · 0 errors'], ['SLOG', 'Optane P4800X'], ['Compression', 'lz4 · 1.31×']])],
-        Datasets: [list('Datasets', [I('chronicles', 'movies & TV', '41.2 TB'), I('forge', 'downloads · +1.4 TB this week', '9.8 TB', WARN, WARN), I('nexus', 'service data · NFS', '3.1 TB'), I('vault', 'sensitive · encrypted', '1.4 TB'), I('melodies', 'music', '2.6 TB'), I('scrolls', 'documents', '0.4 TB'), I('limbo', 'staging', '6.5 TB')], full)],
-        Protection: [list('Copies', [I('Snapshots', 'hourly · 48 h, daily · 30 d', 'OK'), I('Offsite · Synology Site B', 'vault · scrolls · nexus', 'today 02:47', OK)], full)] },
-      rel: [['Host', [R('alexandria')]], ['Used by', [R('apollo', 'chronicles · melodies'), R('hermes', 'forge · chronicles'), R('olympus', 'nexus backups')]], ['Replicates to', [R('synology')]]] });
-
-    // Guests
-    var guest = function (id, kind, hostId, ip, role, s, res, cfg, ctrs, extra) {
-      extra = extra || {};
-      var ab = kind === 'VM' ? 'VM' : 'LXC';
-      var tabs = { Overview: [bars('Resources', res), kv('Configuration', cfg)].concat(extra.notes || []) };
-      tabs[kind === 'VM' ? 'Containers' : 'Services'] = ctrs.length ? [list(kind === 'VM' ? 'Docker containers' : 'Containers / services', ctrs, full)] : [note('No containers', 'No Docker runtime in this guest. Metrics come from the Proxmox API and node_exporter.')];
-      tabs.Network = [kv('Interface', [['net0', 'virtio · vmbr0'], ['VLAN', extra.vlan || '30'], ['Address', ip], ['MAC', 'BC:24:11:' + (id.length * 7 % 90 + 10) + ':0F:' + (id.length * 3 + 10)]]), list('Firewall', extra.fw || [I('ALLOW in tcp 22 from VLAN 1', '', '', OK), I('DROP in * (policy)', '', '', CRIT)])];
-      tabs.Backups = [list('3-2-1', extra.copies || [I('Production', 'local-nvme', '✓'), I('Nightly vzdump', 'alexandria · nexus/backups · 03:00', '✓'), I('Offsite', 'Synology · via Atlas → Synology', '✓')]), list('Runs', [I('vzdump · snapshot', 'today 03:12', 'OK'), I('vzdump · snapshot', 'yesterday 03:11', 'OK')])];
-      var diff = extra.diff || [];
-      var accepted = st.accepted[id];
-      tabs['Asset & CMDB'] = [list('Declared (NetBox) vs observed', diff.length ? diff.map(function (d) { var same = accepted; return I(d[0], 'NetBox: ' + (same ? d[2] : d[1]), 'observed: ' + d[2] + (same ? ' ✓' : ' ≠'), same ? OK : WARN, same ? OK : WARN); }) : [I('All fields match', 'site · host · VLAN · IP · vCPU · memory', '✓')], full),
-        kv('CMDB record', [['Role', role], ['Owner', 'Totophe'], ['Lifecycle', kind === 'VM' && s === 'off' ? 'Test' : 'Production'], ['Criticality', extra.crit || 'Low']])];
-      if (diff.length && !accepted) tabs['Asset & CMDB'][0].btn = ['Accept observed → update NetBox', 'accept:' + id];
-      tabs.Events = [list('Events', extra.events || [I('Started', 'Proxmox', '23 d ago', MUTE)], full)];
-      return add(id, { type: kind, ab: ab, name: id === 'tailscale' ? 'tailscale-sr' : id, site: O[hostId] ? O[hostId].site : 'home', st: s, sub: kind + ' · on ' + (O[hostId] ? O[hostId].name : hostId) + ' · ' + ip + ' · ' + role,
-        host: hostId, ip: ip, tabs: tabs, rel: [['Runs on', [R(hostId)]]].concat(extra.rel || []) });
-    };
-    guest('apollo', 'VM', 'olympus', '10.30.0.101', 'Media server', M ? 'ok' : 'warn', [['CPU · 6 vCPU', 14], ['Memory · 16 GB', M ? 88 : 100, M ? '14.1 GB' : '16.0 GB · ballooning'], ['Disk · 128 GB', 47]],
-      [['vCPU', '6'], ['Memory', '16 GB · balloon min 8'], ['hostpci0', 'Iris Xe · Quick Sync'], ['OS', 'Ubuntu 24.04']], [R('plex'), R('tautulli'), R('audiobookshelf'), R('komga')],
-      { diff: [['Memory', '12 GB', '16 GB'], ['PCI passthrough', 'none', 'Iris Xe']], crit: 'Medium', rel: [['Depends on', [R('atlas', 'chronicles · melodies (ro)'), R('hermes', 'imports')]], ['Exposed by', [R('c3po', 'Plex relay'), R('caddy', 'plex.home.lan')]], ['Service', [R('svc-media')]]],
-        copies: [I('Production', 'local-nvme', '✓'), I('Nightly vzdump', 'config only', '✓'), I('Offsite', 'media excluded by design', '—', MUTE)] });
-    guest('hermes', 'VM', 'olympus', '10.30.0.102', 'ARR stack', S ? 'ok' : 'warn', [['CPU · 4 vCPU', 19], ['Memory · 8 GB', 89, '7.1 GB'], ['Disk · 64 GB', 58]],
-      [['vCPU', '4'], ['Memory', '8 GB · balloon min 6'], ['Disk', 'local-nvme · 64 GB'], ['OS', 'Debian 12']], [R('sonarr'), R('radarr'), R('lidarr'), R('prowlarr'), R('transmission'), R('overseerr')],
-      { diff: [['Memory', '6 GB', '8 GB']], rel: [['Depends on', [R('atlas', 'forge · chronicles (rw)'), R('pihole', 'DNS')]], ['Used by', [R('apollo', 'library imports')]], ['Service', [R('svc-media')]]],
-        events: [I('Watchtower updated 4 images', 'docker', '09:58', INFO), I('sonarr OOM-killed ×3', 'docker', '10:42', S ? MUTE : WARN)] });
-    guest('icarus', 'VM', M ? 'prometheus' : 'olympus', '10.30.0.103', 'Always-on desktop', 'ok', [['CPU · 4 vCPU', 6], ['Memory · 12 GB', 95, '11.4 GB', OK], ['Disk', 31]], [['vCPU', '4'], ['Memory', '12 GB'], ['Display', 'SPICE · virtio-gpu']], [],
-      { events: M ? [I('Live-migrated to Prometheus', 'Pantheon action', 'just now', OK)] : null });
-    guest('labk3s', 'VM', 'olympus', '10.30.0.104', 'k3s test cluster', 'off', [['CPU', 0, 'stopped', MUTE], ['Memory', 0, '0 / 8 GB', MUTE]], [['vCPU', '4'], ['Memory', '8 GB']], [], {});
-    guest('pihole', 'LXC', 'olympus', '10.30.0.110', 'DNS / ad-blocking', 'ok', [['CPU', 2], ['Memory · 1 GB', 40, '410 MB'], ['Queries', 18, '4.2 k/h', OK]],
-      [['Cores', '1'], ['Unprivileged', 'yes'], ['rootfs', '8 GB'], ['Protection', 'on']], [I('pihole-FTL', 'systemd · 96 MB', 'active'), I('lighttpd', 'admin UI', 'active'), I('cron', 'gravity Sun 03:00', 'active')],
-      { crit: 'High', fw: [I('ALLOW udp,tcp 53 from all VLANs', '', '', OK), I('ALLOW tcp 80 from caddy', '', '', OK), I('DROP * (policy)', '', '', CRIT)], rel: [['Used by', [R('hermes', 'DNS'), R('apollo', 'DNS'), I('All VLANs', 'primary resolver', '', OK)]], ['Pair', [I('hestia-rpi', 'secondary · Gravity Sync', '', OK)]], ['Service', [R('svc-dns')]]] });
-    guest('gitea', 'LXC', 'olympus', '10.30.0.111', 'Git mirror', 'ok', [['CPU', 1], ['Memory · 2 GB', 45, '0.9 GB']], [['Cores', '2'], ['rootfs', '32 GB']], [R('gitea-app'), R('act-runner')], { rel: [['Service', [R('svc-dev')]]] });
-    guest('tailscale', 'LXC', 'olympus', '10.1.0.30', 'Subnet router', 'ok', [['CPU', 1], ['Memory', 40, '0.2 GB']], [['Advertises', 'VLAN 1 · VLAN 30']], [], { vlan: '1', rel: [['Network', [R('vlan1'), R('vlan30')]]] });
-    guest('caddy', 'LXC', 'olympus', '10.30.0.112', 'Reverse proxy', 'ok', [['CPU', 3], ['Memory', 30, '0.3 GB']], [['Routes', '18'], ['NICs', 'VLAN 30 + VLAN 95']], [R('caddy-proxy')], { vlan: '30 · 95', rel: [['Ingress from', [R('r2d2', 'VLAN 95')]], ['Service', [R('svc-ingress')]]] });
-    guest('monitoring', 'LXC', 'olympus', '10.30.0.113', 'Metrics & probes', 'ok', [['CPU', 7], ['Memory · 4 GB', 65, '2.6 GB']], [['Cores', '2'], ['Disk', '64 GB']], [R('victoriametrics'), R('vmagent'), R('uptime-kuma'), R('pantheon')], {});
-    guest('aurora', 'VM', 'prometheus', '10.30.0.61', 'Light inference · A2000', 'ok', [['CPU', 12], ['GPU', 41]], [['GPU', 'RTX A2000 passthrough']], [], { rel: [['Service', [R('svc-ai')]]] });
-    guest('hephaestus', 'VM', 'prometheus', '10.30.0.60', 'Dev server', 'ok', [['CPU', 18], ['Memory', 62]], [['Devcontainers', '4 · VLAN 70']], [], { rel: [['Service', [R('svc-dev')]]] });
-    guest('ocr', 'LXC', 'prometheus', '10.30.0.62', 'Document OCR', 'ok', [['CPU', 4], ['Memory', 38]], [['App', 'paperless-ngx · tika']], [], {});
-    guest('vllm', 'VM', 'delphi', '10.30.0.70', 'vLLM tensor-parallel', 'warn', [['GPU 0', 94, '94%', OK], ['GPU 1 temp', 83, '83 °C', WARN]], [['GPUs', '2× RTX 3090 passthrough'], ['Model', 'Qwen3 32B · AWQ']], [R('vllm-server')], { rel: [['Service', [R('svc-ai')]]] });
-
-    // Containers
-    var ctr = function (id, name, guestId, image, s, mem, up, extra) {
-      extra = extra || {};
-      return add(id, { type: 'Container', ab: 'CTR', name: name, site: 'home', st: s, sub: image + ' · in ' + guestId, host: guestId,
-        tabs: { Overview: [kv('Container', [['Image', image], ['State', up, s === 'warn' ? WARN : TXT], ['Memory', mem], ['Restart policy', 'unless-stopped']]), bars('Usage', [['CPU', extra.cpu || 3], ['Memory vs limit', extra.memp || 40, extra.memt]])].concat(extra.notes || []),
-          Logs: [list('Recent events', extra.events || [I('Healthy', 'healthcheck', '1 min ago', OK)], full)] },
-        rel: [['Runs in', [R(guestId)]]].concat(extra.rel || []) });
-    };
-    ctr('sonarr', 'sonarr', 'hermes', 'linuxserver/sonarr:4', S ? 'ok' : 'warn', S ? '820 MB / 1.5 GB' : '1.0 GB / 1 GB', S ? 'up 1 min' : 'restarting (OOM ×3)', {
-      memp: S ? 55 : 100, memt: S ? '55%' : '100% · OOM',
-      notes: S ? [] : [{ type: 'note', t: 'OOM-killed after update', text: 'Exit code 137 three times in an hour since Watchtower pulled a new image. The new version needs more than the 1 GB limit.', gc: full, bd: '#5A4A1F', btn: ['Raise limit to 1.5 GB & restart', 'sonarr'] }],
-      events: S ? [I('Restarted with 1.5 GB limit', 'Pantheon action', 'just now', OK)] : [I('OOM-killed (137)', 'docker', '10:42', WARN), I('OOM-killed (137)', 'docker', '10:21', WARN), I('Image updated', 'watchtower', '09:58', INFO)],
-      rel: [['Service', [R('svc-media')]]] });
-    [['radarr', 'hermes', 'linuxserver/radarr', '612 MB'], ['lidarr', 'hermes', 'linuxserver/lidarr', '388 MB'], ['prowlarr', 'hermes', 'linuxserver/prowlarr', '201 MB'], ['transmission', 'hermes', 'linuxserver/transmission', '944 MB'], ['overseerr', 'hermes', 'sctx/overseerr', '256 MB'],
-      ['plex', 'apollo', 'plexinc/pms-docker', '3.1 GB'], ['tautulli', 'apollo', 'tautulli/tautulli', '210 MB'], ['audiobookshelf', 'apollo', 'advplyr/audiobookshelf', '330 MB'], ['komga', 'apollo', 'gotson/komga', '640 MB'],
-      ['gitea-app', 'gitea', 'gitea/gitea:1.22', '640 MB'], ['act-runner', 'gitea', 'gitea/act_runner', '120 MB'], ['caddy-proxy', 'caddy', 'lucaslorentz/caddy-docker-proxy', '90 MB'],
-      ['victoriametrics', 'monitoring', 'victoriametrics/victoria-metrics', '1.4 GB'], ['vmagent', 'monitoring', 'victoriametrics/vmagent', '310 MB'], ['uptime-kuma', 'monitoring', 'louislam/uptime-kuma', '160 MB'], ['pantheon', 'monitoring', 'pantheon/server', '240 MB'],
-      ['ollama-a', 'kronos', 'ollama/ollama', '6.2 GB'], ['ollama-b', 'kronos', 'ollama/ollama', '4.8 GB'], ['vllm-server', 'vllm', 'vllm/vllm-openai', '22 GB']
-    ].forEach(function (c) { ctr(c[0], c[0].replace('-app', '').replace('caddy-proxy', 'caddy-docker-proxy'), c[1], c[2], 'ok', c[3], 'up ' + (c[1] === 'hermes' ? '6 d' : '23 d')); });
-
-    // Providers & VPS
-    var vps = function (id, prov, role, lands, targets, s, extra) {
-      extra = extra || {};
-      var tabs = { Overview: [kv('Tunnel', [['Type', extra.link || 'WireGuard'], ['Last handshake', s === 'crit' ? '14 min ago' : '2 s ago', s === 'crit' ? CRIT : TXT], ['Lands on', lands], ['RTT to home', s === 'crit' ? '—' : '11 ms']]), bars('Resources', [['CPU', extra.cpu || 6], ['Memory', extra.mem || 38]])].concat(extra.notes || []),
-        Events: [list('Events', extra.events || [I('Handshake OK', 'WireGuard', 'continuous', OK)], full)] };
-      if (extra.diag) tabs.Diagnostics = extra.diag;
-      return add(id, { type: 'VPS', ab: 'VPS', name: id, site: 'home', st: s, sub: O[prov].name + ' · ' + role + ' → ' + lands, prov: prov,
-        tabs: tabs, rel: [['Provider', [R(prov)]], ['Tunnels into', targets]].concat(extra.rel || []) });
-    };
-    add('ovh', { type: 'Provider', ab: 'OVH', name: 'OVH', site: 'home', st: 'ok', sub: 'Gravelines · 3 edge VPS' });
-    add('quicksrv', { type: 'Provider', ab: 'QS', name: 'Quicksrv.io', site: 'home', st: K ? 'ok' : 'crit', sub: '2 edge VPS' });
-    add('scaleway', { type: 'Provider', ab: 'SCW', name: 'Scaleway', site: 'home', st: 'ok', sub: 'fr-par · Wellmade fleet · 4 VPS' });
-    add('cloudflare', { type: 'Provider', ab: 'CF', name: 'Cloudflare', site: 'home', st: 'ok', sub: '3 tunnels · 4 zones' });
-    vps('r2d2', 'ovh', 'public ingress', 'VLAN 95 · caddy', [R('vlan95'), R('caddy')], 'ok', { rel: [['Service', [R('svc-ingress')]]] });
-    vps('c3po', 'ovh', 'Plex relay', 'apollo', [R('apollo', 'tcp 32400')], 'ok', { cpu: 12, rel: [['Service', [R('svc-media')]]] });
-    vps('bb8', 'ovh', 'mail & webhooks', 'hermes-tools', [R('hermes-tools', 'VPS ↔ VPS')], 'ok', { link: 'WireGuard VPS ↔ VPS', rel: [['Service', [R('svc-wellmade')]]] });
-    var steps = [['Public HTTPS reachability (3 probes)', '200 · 38 ms', OK], ['ICMP from r2d2 (OVH)', '22 ms', OK], ['WireGuard peer on UDM', 'qsrv-01 · enabled', OK], ['Peer endpoint vs DNS', '203.0.113.7 ≠ .12', WARN], ['UDP 51820 to endpoint', 'no reply', CRIT]];
-    var diagItems = steps.map(function (s, i) {
-      if (K) return I(s[0], '', i < 3 ? s[1] : (i === 3 ? '203.0.113.12 ✓' : 'handshake OK'), OK, OK);
-      var done = st.diag !== 'idle' && i < st.step, running = st.diag === 'running' && i === st.step;
-      return I((i + 1) + '. ' + s[0], running ? 'checking…' : '', done ? s[1] : (running ? '…' : '—'), done ? s[2] : MUTE, done ? s[2] : MUTE);
+    // Power wiring (NUT): which UPS feeds what
+    var upsList = D.nut ? D.nut.ups : [];
+    var upsOf = {}, poweredBy = {}, powerPath = {};
+    upsList.forEach(function (u) {
+      Object.keys(u.poweredBy).forEach(function (k) { upsOf[k] = u.id; poweredBy[k] = [['Powered by', [R(u.id, u.poweredBy[k])]]]; });
+      Object.keys(u.powerPath).forEach(function (k) { powerPath[k] = R(u.id, u.powerPath[k]); });
     });
-    var diagCard = list('Guided diagnostics', diagItems, full);
-    if (!K) { diagCard.btn = st.diag === 'running' ? null : [st.diag === 'done' ? 'Run again' : 'Run diagnostics', 'diag']; }
-    var diag = [diagCard];
-    if (!K && st.diag === 'done') diag.push({ type: 'note', t: 'Likely cause: new public IP', text: 'The provider rebooted k2so and reassigned its address. DNS returns 203.0.113.12, the UDM peer still points to 203.0.113.7.', gc: full, bd: '#6B2A2A', btn: ['Update peer endpoint & re-handshake', 'fixk2so'] });
-    if (K) diag.push({ type: 'note', t: 'Resolved', text: 'Endpoint updated to 203.0.113.12; handshake OK; alert auto-resolved. Tip: use a DNS name as peer endpoint so the next IP change heals itself.', gc: full, bd: '#2F5A3A' });
-    vps('k2so', 'quicksrv', 'lab access edge', 'VLAN 30', [R('vlan30')], K ? 'ok' : 'crit', { cpu: 3, mem: 28, diag: diag,
-      notes: K ? [] : [{ type: 'note', t: 'Tunnel down', text: 'Public probes succeed, but the WireGuard handshake to the home lab is 14 minutes stale. Open Diagnostics to find out why.', gc: full, bd: '#6B2A2A' }],
-      events: K ? [I('Handshake restored', 'Pantheon action', 'just now', OK), I('Provider maintenance reboot', 'Quicksrv.io', '10:28', WARN)] : [I('Handshake stale > 5 min', 'alert fired', '10:31', CRIT), I('Provider maintenance reboot', 'Quicksrv.io', '10:28', WARN)] });
-    vps('chopper', 'quicksrv', 'client previews', 'VLAN 70', [R('vlan70'), R('hephaestus', 'devcontainers')], 'ok', { rel: [['Service', [R('svc-dev')]]] });
-    ['umami', 'crm', 'tools', 'monitor'].forEach(function (n) { vps('hermes-' + n, 'scaleway', 'Wellmade ' + n, 'Cloudflare tunnel', [R('cloudflare')], 'ok', { link: 'Cloudflare tunnel', rel: [['Service', [R('svc-wellmade')]]] }); });
-    var provTabs = function (id) {
-      var kids = Object.keys(O).filter(function (k) { return O[k].prov === id; });
-      O[id].tabs = { Overview: [list('VPS', kids.map(function (k) { return R(k, O[k].sub.split(' · ').slice(1).join(' · ')); }), full)], Billing: [kv('Account', [['Monthly', '[AMOUNT]'], ['Renewal', '[DATE]']])] };
-      O[id].rel = [['Site', [R('home')]]];
-    };
-    provTabs('ovh'); provTabs('quicksrv'); provTabs('scaleway');
-    O.cloudflare.tabs = { Overview: [list('Tunnels', [I('olympus', 'cloudflared on caddy', 'up'), I('hermes-crm', 'Scaleway', 'up'), I('hermes-tools', 'Scaleway', 'up')], full), kv('DNS', [['Zones', '4'], ['Requests (24 h)', '41.2 k']])] };
-    O.cloudflare.rel = [['Used by', [R('hermes-crm'), R('hermes-tools')]]];
+    var withPower = function (id, rel) { return (rel || []).concat(poweredBy[id] || []); };
+    var upsHome = upsList.filter(function (u) { return u.id === 'ups-home'; })[0];
+    var batt = upsHome ? upsHome.batt : 100, runtime = upsHome ? upsHome.runtime : 18;
 
-    // VLANs
-    var vlan = function (vid, name, site, subnet, zone, s, members, extra) {
-      extra = extra || {};
-      return add('vlan' + vid, { type: 'VLAN', ab: 'V' + vid, name: 'VLAN ' + vid + ' · ' + name, site: site, st: s, sub: subnet + ' · zone ' + zone,
-        tabs: { Overview: [kv('Network', [['Subnet', subnet], ['Gateway', extra.gw || subnet.replace('0/24', '1')], ['DHCP', extra.dhcp || 'static only'], ['Zone', zone]])].concat(extra.notes || []),
-          Members: [list('Members', members, full)], Policy: [list('Allowed to reach', extra.policy || [I('default deny', 'between zones', '', MUTE)], full)] },
-        rel: [['Gateway', [R(site === 'b' ? 'udmse' : 'udm')]]] });
-    };
-    vlan(1, 'Mgmt', 'home', '10.1.0.0/24', 'Internal', 'warn', [R('udm'), R('agg'), R('access'), R('tailscale'), I('olympus mgmt', '10.1.0.21 · should be VLAN 5', '', WARN)], { notes: [note('Remediation', 'Proxmox management interfaces and IPMI still live here. NetBox declares them on VLAN 5.', '#5A4A1F')] });
-    vlan(10, 'Home', 'home', '10.10.0.0/24', 'Trusted', 'ok', [I('Sparta', '.20'), I('office-hifi', '.31'), I('hestia-rpi', '.53'), I('+38 clients', 'phones, TVs, IoT', '', MUTE)], { dhcp: '.50–.250', policy: [I('Servers · VLAN 30', 'tcp 443, 32400, 53', 'ports', WARN), I('DMZ · VLAN 95', 'tcp 443', 'ports', WARN)] });
-    vlan(30, 'Servers', 'home', '10.30.0.0/24', 'Servers', 'warn', [R('olympus'), R('prometheus'), R('kronos'), R('delphi'), R('alexandria'), R('apollo'), R('hermes'), R('pihole'), R('caddy'), I('3 undeclared IPs', '.87 · .88 · .91 (lab-k3s?)', '', WARN)],
-      { notes: [note('Drift', '3 IPs answer on VLAN 30 that NetBox does not know about.', '#5A4A1F')], policy: [I('DMZ · VLAN 95', 'allow', 'allow', OK), I('Site B · VLAN 200', 'rsync 873 · ssh 22', 'ports', WARN)] });
-    vlan(70, 'Customers', 'home', '10.70.0.0/24', 'Isolated', 'ok', [R('hephaestus', '4 devcontainers'), R('chopper', 'edge tunnel')], { policy: [I('Servers · VLAN 30', 'gitea 443 · postgres 5432', 'ports', WARN)] });
-    vlan(95, 'DMZ', 'home', '10.95.0.0/24', 'DMZ', 'ok', [R('caddy', 'eth1 · .10'), R('r2d2', 'edge tunnel')], { policy: [I('Servers · VLAN 30', 'caddy → upstream ports', 'ports', WARN)] });
-    vlan(200, 'Site B LAN', 'b', '10.200.0.0/24', 'Remote', 'ok', [R('synology', '.10'), R('udmse', '.1'), I('1 client', '', '', OK)], { dhcp: '.100–.199' });
+    // Power readings and PSU facts, from whichever source measures them
+    var PWD = feed('power'), watts = {}, PSU = {};
+    PWD.forEach(function (p) { if (p.id) watts[p.id] = p; });
+    Object.keys(D).forEach(function (k) { if (D[k] && D[k].psu) Object.assign(PSU, D[k].psu); });
 
-    // Services
-    var svc = function (id, name, desc, comps) {
-      var worst = comps.reduce(function (w, c) { var s = O[c.ref] ? O[c.ref].st : 'ok'; return s === 'crit' ? 'crit' : (s === 'warn' && w !== 'crit' ? 'warn' : w); }, 'ok');
-      return add(id, { type: 'Service', ab: 'SVC', name: name, site: 'home', st: worst, sub: desc,
-        tabs: { Overview: [list('Components', comps, full)], 'Dependency path': [list('If this breaks…', comps.map(function (c) { return R(c.ref, 'part of ' + name); }), full)] }, rel: [] });
-    };
-    svc('svc-media', 'Media', 'Plex, ARR stack, libraries and remote access', [R('apollo', 'Plex & readers'), R('hermes', 'ARR stack'), R('sonarr', 'TV automation'), R('atlas', 'libraries'), R('c3po', 'remote relay')]);
-    svc('svc-dns', 'DNS', 'Resolution and ad-blocking for every VLAN', [R('pihole', 'primary'), I('hestia-rpi', 'secondary', '', OK)]);
-    svc('svc-ingress', 'Edge ingress', 'Public traffic into the home lab', [R('r2d2', 'OVH ingress'), R('caddy', 'reverse proxy'), R('vlan95', 'DMZ')]);
-    svc('svc-dev', 'Dev platform', 'Customer devcontainers, git, previews', [R('hephaestus'), R('gitea'), R('chopper', 'client previews'), R('vlan70'), R('hyperion', 'planned')]);
-    svc('svc-ai', 'AI inference', 'Local models for agents and apps', [R('kronos', 'Ollama'), R('delphi', 'vLLM'), R('aurora', 'light inference')]);
-    svc('svc-wellmade', 'Wellmade apps', 'Client-facing apps on Scaleway', [R('hermes-umami'), R('hermes-crm'), R('hermes-tools'), R('hermes-monitor'), R('bb8', 'mail relay'), R('cloudflare')]);
-
-    // ---------- UPS ----------
-    var batt = st.onBatt ? st.batt : 100;
-    var runtime = Math.max(1, Math.round(18 * batt / 100));
-    var trig50 = st.onBatt && batt <= 50, trig5 = st.onBatt && runtime <= 5;
-    add('ups-home', { type: 'UPS', ab: 'UPS', name: 'ups-rack', site: 'home', st: st.onBatt ? 'crit' : 'ok', sub: 'Home lab · [MODEL] 1500 VA / 1000 W · NUT on alexandria',
-      tabs: {
-        Overview: [bars('Battery & load', [['Battery', batt, batt + '%', batt <= 50 ? CRIT : (batt <= 80 ? WARN : OK)], ['Load', 42, '420 / 1000 W'], ['Runtime at this load', Math.round(runtime / 18 * 100), runtime + ' min', runtime <= 5 ? CRIT : (runtime <= 10 ? WARN : OK)]]),
-          kv('Status', [['State', st.onBatt ? 'ON BATTERY' : 'On line', st.onBatt ? CRIT : OK], ['Input', st.onBatt ? '0 V · mains lost' : '231 V · 50 Hz', st.onBatt ? CRIT : TXT], ['Output', '230 V'], ['Last self-test', 'Sun 03:30 · passed'], ['Battery installed', '[DATE]'], ['Driver', 'NUT usbhid-ups']]),
-          list('Protected devices', [R('udm', 'group 1 · stays up to the end'), R('agg', 'group 1 · stays up to the end'), R('prometheus', 'group 2 · off at 50%'), R('olympus', 'group 2 · off at 5 min left'), R('alexandria', 'group 3 · last, at 3 min left')]),
-          list('Shutdown policy (NUT + Proxmox)', [
-            I('At 50% battery', 'prometheus: guests stop, then host powers off', trig50 ? 'triggered' : 'armed', trig50 ? WARN : OK, trig50 ? WARN : MUTE),
-            I('5 min of runtime left', 'olympus: guests shut down in order, then host', trig5 ? 'triggered' : 'armed', trig5 ? CRIT : OK, trig5 ? CRIT : MUTE),
-            I('3 min of runtime left', 'alexandria: NFS clients gone, pool export, power off', 'armed', OK, MUTE),
-            I('Mains back', 'BIOS "restore on AC" + Proxmox start-at-boot order', 'armed', OK, MUTE)])],
-        Events: [list('Events', (st.onBatt ? [I('Mains lost · on battery', 'NUT', 'just now', CRIT)] : []).concat([I('Self-test passed', 'NUT', 'Sun 03:30', OK), I('Brownout · 2 s on battery', 'NUT', '12 Oct', WARN)]), full)]
-      },
-      rel: [['Site', [R('home')]], ['Monitored by', [R('alexandria', 'NUT server · USB')]], ['Not protected', [R('delphi', 'wall power'), R('kronos', 'wall power')]]] });
-    add('ups-b', { type: 'UPS', ab: 'UPS', name: 'ups-siteb', site: 'b', st: 'ok', sub: 'Site B · [MODEL] 600 VA · USB to Synology',
-      tabs: { Overview: [bars('Battery & load', [['Battery', 100], ['Load', 18, '62 W'], ['Runtime at this load', 100, '42 min', OK]]), kv('Status', [['State', 'On line', OK], ['Input', '229 V · 50 Hz'], ['Driver', 'Synology DSM UPS server']]),
-        list('Protected devices', [R('synology', 'safe mode at 10% battery'), R('udmse', 'stays up')])] },
-      rel: [['Site', [R('siteb')]]] });
-
-    // ---------- physical layouts (thermal map) ----------
-    var LT = function (k, label, x, y, w, h, t, warn, thr, sensor, ex) { return Object.assign({ k: k, kind: 'temp', label: label, x: x, y: y, w: w, h: h, t: t, warn: warn, thr: thr, sensor: sensor }, ex || {}); };
-    var LF = function (k, label, x, y, s, rpm, max, sensor) { return { k: k, kind: 'fan', label: label, x: x, y: y, s: s, rpm: rpm, max: max, sensor: sensor }; };
-    var HWL = {
-      alexandria: { chassis: 'Thermaltake tower · X9SRI-F', def: 'd4', comps: [
-        LF('fan2', 'FAN2 · front', 12, 70, 52, 900, 1800, 'IPMI FAN2'), LF('fan3', 'FAN3 · front', 12, 230, 52, 900, 1800, 'IPMI FAN3'),
-        LT('d1', 'Exos · bay 1', 80, 24, 130, 46, 36, 45, 55, 'smartctl sda'), LT('d2', 'Exos · bay 2', 80, 76, 130, 46, 37, 45, 55, 'smartctl sdb'), LT('d3', 'Exos · bay 3', 80, 128, 130, 46, 39, 45, 55, 'smartctl sdc'),
-        LT('d4', 'Exos · bay 4', 80, 180, 130, 46, 46, 45, 55, 'smartctl sdd', { note: 'Bay 4 sits in the dead zone between the two front fans and runs ~8 °C hotter than its neighbours. The planned CSE-836 fan wall fixes this.' }),
-        LT('d5', 'Exos · bay 5', 80, 232, 130, 46, 38, 45, 55, 'smartctl sde'), LT('d6', 'Exos · bay 6', 80, 284, 130, 46, 36, 45, 55, 'smartctl sdf'),
-        LT('psu', 'PSU · 168 W', 236, 18, 100, 56, 38, 50, 60, 'IPMI PSU temp'),
-        LT('dimma', 'A', 352, 30, 28, 110, 41, 70, 80, 'IPMI DIMM A~D', { vert: true }), LT('cpu', 'CPU · E5-2650L v2', 388, 30, 130, 110, 52, 75, 85, 'IPMI CPU (PECI)'),
-        LF('fan1', 'FAN1 · CPU', 462, 52, 46, 1100, 2200, 'IPMI FAN1'), LT('dimmb', 'B', 526, 30, 28, 110, 40, 70, 80, 'IPMI DIMM E~H', { vert: true }),
-        LT('pch', 'PCH', 420, 162, 80, 46, 48, 80, 90, 'IPMI PCH'),
-        LT('hba', 'PCIe 1 · HBA LSI SAS2308', 236, 236, 290, 30, 61, 70, 80, 'mpt temp', { note: 'HBAs have no fan and rely on case airflow. 61 °C is normal; keep it under 70.' }),
-        LT('nic', 'PCIe 2 · 10GbE NIC', 236, 274, 290, 30, 55, 80, 90, 'ethtool -m'), LT('optane', 'PCIe 3 · Optane P4800X', 236, 312, 290, 30, 44, 65, 70, 'nvme smart-log'),
-        LF('fan4', 'FAN4 · rear', 572, 60, 54, 1000, 2000, 'IPMI FAN4')] },
-      olympus: { chassis: 'Minisforum MS-01', def: 'pcore', comps: [
-        LF('fcpu', 'CPU blower', 60, 90, 76, 3200, 5200, 'it87 fan1'), LT('cpu', 'CPU package · i9-13900H', 190, 40, 170, 120, 71, 90, 100, 'coretemp Package'),
-        LT('pcore', 'P-cores (hottest)', 190, 168, 82, 46, 78, 90, 100, 'coretemp Core 8', { note: 'P-cores burst to ~90 °C during builds; the MS-01 throttles at 100 °C.' }), LT('ecore', 'E-cores', 278, 168, 82, 46, 66, 90, 100, 'coretemp Core 16–23'),
-        LT('ram', 'DDR5', 380, 40, 60, 174, 54, 75, 85, 'spd5118', { vert: true }), LT('vrm', 'VRM', 470, 40, 120, 50, 63, 90, 105, 'acpitz zone2'),
-        LT('nvme1', 'M.2 1 · local-nvme', 40, 250, 150, 30, 52, 65, 75, 'nvme0'), LT('nvme2', 'M.2 2', 40, 288, 150, 30, 48, 65, 75, 'nvme1'), LT('nvme3', 'M.2 3 · boot', 40, 326, 150, 30, 45, 65, 75, 'nvme2'),
-        LT('nic', 'X710 · 2× SFP+', 220, 262, 220, 40, 58, 80, 90, 'ethtool -m'), LF('fssd', 'SSD fan', 480, 260, 54, 2600, 4000, 'it87 fan2')] },
-      delphi: { chassis: 'Tower · 2× RTX 3090', def: 'g1mem', comps: [
-        LF('ff1', 'Front fan 1', 12, 70, 52, 1400, 2000, 'nct6798 fan2'), LF('ff2', 'Front fan 2', 12, 200, 52, 1400, 2000, 'nct6798 fan3'),
-        LT('cpu', 'CPU · i5-13500T', 350, 22, 120, 80, 58, 85, 100, 'coretemp'), LT('ram', 'RAM', 480, 22, 40, 80, 46, 75, 85, 'spd5118', { vert: true }), LT('nvme', 'M.2', 350, 108, 120, 22, 49, 65, 75, 'nvme0'),
-        LT('g0', 'PCIe 1 · GPU 0 · RTX 3090', 200, 140, 340, 64, 76, 83, 90, 'DCGM gpu0'), LT('g0mem', 'GPU 0 · VRAM junction', 200, 208, 340, 20, 92, 100, 110, 'DCGM MEMORY_TEMP gpu0'),
-        LT('g1', 'PCIe 2 · GPU 1 · RTX 3090', 200, 246, 340, 64, 83, 83, 90, 'DCGM gpu1', { note: 'GPU 1 breathes air already heated by GPU 0. A riser to space the cards or a 300 W cap usually costs under 5% tokens/s.' }),
-        LT('g1mem', 'GPU 1 · VRAM junction', 200, 314, 340, 20, 101, 100, 110, 'DCGM MEMORY_TEMP gpu1', { note: 'GDDR6X throttles near 110 °C; sustained 100 °C+ shortens its life. Repadding is the usual fix.' }),
-        LT('psu', 'PSU · 762 W', 40, 300, 130, 56, 44, 55, 65, 'smart plug + PSU sensor'),
-        LF('gf0', 'GPU 0 fans', 430, 157, 30, 1950, 3000, 'DCGM fan gpu0'), LF('gf1', 'GPU 1 fans', 430, 263, 30, 2400, 3000, 'DCGM fan gpu1'), LF('fr', 'Rear fan', 572, 40, 54, 1300, 2000, 'nct6798 fan1')] }
-    };
-    var PSU = {
-      olympus: [['Supply', 'External 280 W adapter'], ['Telemetry', 'none · no PMBus', MUTE], ['At the wall', '72 W · Home Assistant plug'], ['Headroom', '~74%']],
-      alexandria: [['PSU', 'ATX · [MODEL] · 650 W'], ['Load', '168 W · 26%'], ['Temperature', '38 °C (IPMI)'], ['Rails 12 / 5 / 3.3 V', '12.06 / 5.02 / 3.31 V'], ['Efficiency (est.)', '~90%']],
-      delphi: [['PSU', 'ATX · [MODEL] · 1600 W'], ['Load', '762 W · 48%'], ['Peak (7 d)', '1 140 W · 71%', WARN], ['Transients', 'each 3090 spikes to ~650 W'], ['Efficiency (est.)', '~92%']],
-      prometheus: [['PSU', 'ATX · [MODEL] · 550 W'], ['Load', '96 W · 17%'], ['Telemetry', 'smart plug only', MUTE]],
-      kronos: [['PSU', 'Dell 685 W (OEM)'], ['Load', '142 W · 21%'], ['Telemetry', 'iDRAC-less · smart plug', MUTE]],
-      synology: [['Supply', 'Internal PSU'], ['Load', '38 W'], ['Telemetry', 'DSM']]
-    };
-    var PWR = { olympus: R('ups-home', 'group 2 · off at 5 min left'), alexandria: R('ups-home', 'group 3 · last off · NUT server'), prometheus: R('ups-home', 'group 2 · off at 50%'), synology: R('ups-b', 'USB · DSM safe mode at 10%') };
-    Object.keys(PSU).forEach(function (h) {
-      var hw = (O[h].tabs.Hardware || []).filter(function (c) { return !(c.t && c.t.indexOf('Power') === 0); });
-      var out = HWL[h] ? [{ type: 'board', layout: h, t: 'Physical layout · thermal map', gc: full }] : [];
-      out = out.concat(hw);
-      out.push(kv('Power supply', PSU[h]));
-      out.push(PWR[h] ? list('Power path', [PWR[h]]) : note('Power path · not on UPS', O[h].name + ' runs on wall power by design: at its draw it would empty the UPS in minutes. A power cut means a hard stop, so keep nothing stateful on it.', '#5A4A1F'));
-      O[h].tabs.Hardware = out;
+    // Sites · UniFi Site Manager
+    (D.sitemanager ? D.sitemanager.sites : []).forEach(function (s) {
+      add(s.id, { type: 'Site', ab: s.ab, name: s.name, site: s.site, st: s.status, sub: s.sub, table: s.table,
+        tabs: { Overview: [bars('Site health', s.health), kv('Facts', s.facts)].concat((s.notes || []).map(noteOf)),
+          Uplinks: [list('Internet uplinks', s.uplinks, full)], Devices: [list(s.devicesTitle, s.devices, full)] },
+        rel: s.rel });
     });
-    [['olympus', 'group 2'], ['alexandria', 'group 3 · NUT server'], ['prometheus', 'group 2'], ['udm', 'group 1'], ['agg', 'group 1']].forEach(function (p) { O[p[0]].rel = (O[p[0]].rel || []).concat([['Powered by', [R('ups-home', p[1])]]]); });
-    O.synology.rel = O.synology.rel.concat([['Powered by', [R('ups-b', 'USB')]]]);
-    O.udmse.rel = (O.udmse.rel || []).concat([['Powered by', [R('ups-b')]]]);
+
+    // Network devices · UniFi Network
+    (D.unifi ? D.unifi.devices : []).forEach(function (d) {
+      add(d.id, { type: 'Network device', ab: 'NET', name: d.name, site: d.site, st: 'ok', sub: d.sub,
+        tabs: { Overview: [bars('Load', d.meters), kv('Facts', d.facts)], Events: [list('Events', d.events, full)] }, rel: withPower(d.id, d.rel) });
+    });
+
+    // Hosts · owned by Proxmox, TrueNAS, NetBox (planned) or Synology; enriched by metrics, power, LLM engines and the CMDB
+    var HWL = {};
+    var telemetry = D.metrics ? D.metrics.hosts : {};
+    var host = function (h) {
+      var t = Object.assign({}, h.hardware, telemetry[h.id]);
+      var cm = (nb.hosts && nb.hosts[h.id]) || {};
+      var facts = (h.facts || []).concat((D.llm && D.llm.hosts[h.id]) || []);
+      var plug = watts[h.id];
+      if (plug && (plug.src === 'plug' || plug.src === 'gpu')) facts.push(['Power', plug.w + ' W']);
+      var ov = (h.meters ? [bars('Resources', h.meters)] : []).concat([kv(h.factsTitle || 'Facts', facts, h.factsWide ? full : one)]).concat((h.notes || []).concat(t.notes || []).map(noteOf));
+      var hw = [];
+      if (t.layout) { HWL[h.id] = t.layout; hw.push({ type: 'board', layout: h.id, t: 'Physical layout · thermal map', gc: full }); }
+      if (t.temps) hw.push(temps('Temperatures', t.temps, t.tempsWide ? full : one));
+      if (t.fans) hw.push(fans(t.fansTitle || 'Fans', t.fans));
+      if (t.drives) hw.push(list('Drives · SMART', t.drives));
+      if (PSU[h.id]) hw.push(kv('Power supply', PSU[h.id]));
+      if (hw.length && D.nut) hw.push(powerPath[h.id] ? list('Power path', [powerPath[h.id]]) : note('Power path · not on UPS', h.name + ' runs on wall power by design: at its draw it would empty the UPS in minutes. A power cut means a hard stop, so keep nothing stateful on it.', '#5A4A1F'));
+      add(h.id, { type: 'Host', ab: 'HOST', name: h.name, site: h.site, st: h.status, sub: h.sub,
+        tabs: { Overview: ov, Metrics: (t.charts || []).map(function (c) { return chart.apply(null, c); }), Hardware: hw,
+          Guests: h.guests ? [list('Guests', h.guests, full)] : [], Network: h.interfaces ? [list('Interfaces', h.interfaces, full)] : [],
+          Events: h.events ? [list('Events', h.events, full)] : [],
+          'Asset & CMDB': (cm.cmdb ? [kv('CMDB record (NetBox)', cm.cmdb)] : []).concat(cm.asset ? [kv('Physical asset (ITAM)', cm.asset)] : []) },
+        rel: withPower(h.id, h.rel) });
+    };
+    (D.proxmox ? D.proxmox.nodes : []).forEach(host);
+    if (D.truenas) host(D.truenas.host);
+    (nb.planned || []).forEach(host);
+    if (D.synology) host(D.synology.host);
+
+    // Pools · TrueNAS
+    (D.truenas ? D.truenas.pools : []).forEach(function (p) {
+      add(p.id, { type: 'Pool', ab: 'POOL', name: p.name, site: p.site, st: p.status, sub: p.sub,
+        tabs: { Overview: [bars('Capacity', p.capacity), kv('Health', p.health)], Datasets: [list('Datasets', p.datasets, full)], Protection: [list('Copies', p.copies, full)] }, rel: p.rel });
+    });
+
+    // Guests · Proxmox, with containers from the Docker agents and the declared record from NetBox
+    var containers = D.docker ? D.docker.containers : [];
+    (D.proxmox ? D.proxmox.guests : []).forEach(function (g) {
+      var id = g.id, isVm = g.kind === 'VM', hostO = O[g.node];
+      var ts = D.tailscale && D.tailscale.routers[id];
+      var meters = g.meters.concat(D.pihole && D.pihole.guest === id ? D.pihole.meters : []);
+      var ctrs = (g.services || []).concat(containers.filter(function (c) { return c.guest === id; }).map(function (c) { return R(c.id); }));
+      var tabs = { Overview: [bars('Resources', meters), kv('Configuration', g.cfg.concat(ts ? ts.facts : []))] };
+      var ctrTab = isVm ? 'Containers' : 'Services';
+      if (ctrs.length) tabs[ctrTab] = [list(isVm ? 'Docker containers' : 'Containers / services', ctrs, full)];
+      else if (D.docker) tabs[ctrTab] = [note('No containers', 'No Docker runtime in this guest. Metrics come from the Proxmox API and node_exporter.')];
+      tabs.Network = [kv('Interface', [['net0', 'virtio · vmbr0'], ['VLAN', g.vlan], ['Address', g.ip], ['MAC', g.mac]]), list('Firewall', g.fw)];
+      tabs.Backups = [list('3-2-1', g.copies), list('Runs', g.runs)];
+      if (nb.guests) {
+        var rec = nb.guests[id] || {}, diff = rec.diff || [], accepted = st.accepted[id];
+        tabs['Asset & CMDB'] = [list('Declared (NetBox) vs observed', diff.length ? diff.map(function (d) { return I(d[0], 'NetBox: ' + (accepted ? d[2] : d[1]), 'observed: ' + d[2] + (accepted ? ' ✓' : ' ≠'), accepted ? OK : WARN, accepted ? OK : WARN); }) : [I('All fields match', 'site · host · VLAN · IP · vCPU · memory', '✓')], full),
+          kv('CMDB record', [['Role', g.role], ['Owner', nb.owner], ['Lifecycle', isVm && g.status === 'off' ? 'Test' : 'Production'], ['Criticality', rec.crit || 'Low']])];
+        if (diff.length && !accepted) tabs['Asset & CMDB'][0].btn = ['Accept observed → update NetBox', 'accept:' + id];
+      }
+      tabs.Events = [list('Events', g.events, full)];
+      add(id, { type: g.kind, ab: isVm ? 'VM' : 'LXC', name: g.name || id, site: hostO ? hostO.site : 'home', st: g.status,
+        sub: g.kind + ' · on ' + (hostO ? hostO.name : g.node) + ' · ' + g.ip + ' · ' + g.role,
+        host: g.node, ip: g.ip, tabs: tabs, rel: [['Runs on', [R(g.node)]]].concat(g.rel || []).concat(ts ? ts.rel : []) });
+    });
+
+    // Containers · Docker agents
+    containers.forEach(function (c) {
+      add(c.id, { type: 'Container', ab: 'CTR', name: c.name, site: 'home', st: c.status, sub: c.image + ' · in ' + c.guest, host: c.guest,
+        tabs: { Overview: [kv('Container', [['Image', c.image], ['State', c.up, c.status === 'warn' ? WARN : TXT], ['Memory', c.mem], ['Restart policy', 'unless-stopped']]), bars('Usage', [['CPU', c.cpu || 3], ['Memory vs limit', c.memp || 40, c.memt]])].concat((c.notes || []).map(noteOf)),
+          Logs: [list('Recent events', c.events || [I('Healthy', 'healthcheck', '1 min ago', OK)], full)] },
+        rel: [['Runs in', [R(c.guest)]]].concat(c.rel || []) });
+    });
+
+    // Providers and their edge VPS · OVH, Quicksrv.io, Scaleway, Cloudflare
+    var provs = ['ovh', 'quicksrv', 'scaleway', 'cloudflare'].map(function (k) { return D[k]; }).filter(Boolean);
+    provs.forEach(function (P) { var p = P.provider; add(p.id, { type: 'Provider', ab: p.ab, name: p.name, site: 'home', st: p.status, sub: p.sub, rel: p.rel }); });
+    provs.forEach(function (P) {
+      P.vps.forEach(function (v) {
+        var crit = v.status === 'crit';
+        var tabs = { Overview: [kv('Tunnel', [['Type', v.link || 'WireGuard'], ['Last handshake', crit ? '14 min ago' : '2 s ago', crit ? CRIT : TXT], ['Lands on', v.lands], ['RTT to home', crit ? '—' : '11 ms']]), bars('Resources', [['CPU', v.cpu || 6], ['Memory', v.mem || 38]])].concat((v.notes || []).map(noteOf)),
+          Events: [list('Events', v.events || [I('Handshake OK', 'WireGuard', 'continuous', OK)], full)] };
+        var dg = v.diagnostics;
+        if (dg) {
+          var card = list('Guided diagnostics', dg.steps.map(function (s, i) {
+            if (dg.fixed) return I(s[0], '', s[3] || s[1], OK, OK);
+            var done = st.diag !== 'idle' && i < st.step, running = st.diag === 'running' && i === st.step;
+            return I((i + 1) + '. ' + s[0], running ? 'checking…' : '', done ? s[1] : (running ? '…' : '—'), done ? s[2] : MUTE, done ? s[2] : MUTE);
+          }), full);
+          if (!dg.fixed) card.btn = st.diag === 'running' ? null : [st.diag === 'done' ? 'Run again' : 'Run diagnostics', 'diag'];
+          tabs.Diagnostics = [card];
+          if (!dg.fixed && st.diag === 'done') tabs.Diagnostics.push(noteOf(dg.cause));
+          if (dg.fixed) tabs.Diagnostics.push(noteOf(dg.outcome));
+        }
+        add(v.id, { type: 'VPS', ab: 'VPS', name: v.id, site: 'home', st: v.status, sub: P.provider.name + ' · ' + v.role + ' → ' + v.lands, prov: P.provider.id,
+          needsDiag: !!dg && !dg.fixed, tabs: tabs, rel: [['Provider', [R(P.provider.id)]], ['Tunnels into', v.targets]].concat(v.rel || []) });
+      });
+    });
+    provs.forEach(function (P) {
+      var p = P.provider;
+      if (p.tunnels) { O[p.id].tabs = { Overview: [list('Tunnels', p.tunnels, full), kv('DNS', p.dns)] }; return; }
+      var kids = Object.keys(O).filter(function (k) { return O[k].prov === p.id; });
+      O[p.id].tabs = { Overview: [list('VPS', kids.map(function (k) { return R(k, O[k].sub.split(' · ').slice(1).join(' · ')); }), full)], Billing: [kv('Account', p.billing)] };
+    });
+
+    // VLANs · UniFi Network, with drift against NetBox
+    (D.unifi ? D.unifi.vlans : []).forEach(function (v) {
+      var dr = nb.vlanDrift && nb.vlanDrift[v.vid];
+      add('vlan' + v.vid, { type: 'VLAN', ab: 'V' + v.vid, name: 'VLAN ' + v.vid + ' · ' + v.name, site: v.site, st: dr ? 'warn' : 'ok', sub: v.subnet + ' · zone ' + v.zone,
+        tabs: { Overview: [kv('Network', [['Subnet', v.subnet], ['Gateway', v.gw || v.subnet.replace('0/24', '1')], ['DHCP', v.dhcp || 'static only'], ['Zone', v.zone]])].concat(dr ? [noteOf(dr.note)] : []),
+          Members: [list('Members', v.members.concat(dr ? [dr.member] : []), full)], Policy: [list('Allowed to reach', v.policy || [I('default deny', 'between zones', '', MUTE)], full)] },
+        rel: [['Gateway', [R(v.site === 'b' ? 'udmse' : 'udm')]]] });
+    });
+
+    // Services · declared in NetBox, health from their components
+    (nb.services || []).forEach(function (s) {
+      var worst = s.comps.reduce(function (w, c) { var cs = O[c.ref] ? O[c.ref].st : 'ok'; return cs === 'crit' ? 'crit' : (cs === 'warn' && w !== 'crit' ? 'warn' : w); }, 'ok');
+      add(s.id, { type: 'Service', ab: 'SVC', name: s.name, site: 'home', st: worst, sub: s.desc,
+        tabs: { Overview: [list('Components', s.comps, full)], 'Dependency path': [list('If this breaks…', s.comps.map(function (c) { return R(c.ref, 'part of ' + s.name); }), full)] }, rel: [] });
+    });
+
+    // UPS · NUT
+    upsList.forEach(function (u) {
+      var ov = [bars('Battery & load', u.meters), kv('Status', u.facts), list('Protected devices', u.protects)];
+      if (u.policy) ov.push(list('Shutdown policy (NUT + Proxmox)', u.policy));
+      var tabs = { Overview: ov };
+      if (u.events) tabs.Events = [list('Events', u.events, full)];
+      add(u.id, { type: 'UPS', ab: 'UPS', name: u.name, site: u.site, st: u.status, sub: u.sub, tabs: tabs, rel: u.rel });
+    });
+    var noData = Object.keys(O).length === 0;
 
     // ---------- resolve references ----------
     var resolve = function (it) {
       if (it.ref) {
         var o = O[it.ref];
-        if (!o) return { t: it.ref, s: it.s, r: it.r, rc: it.rc || MUTE, c: MUTE, hasGo: false, noGo: true };
+        if (!o) return { t: it.ref, s: it.s, r: it.r, rc: lv(it.rc) || MUTE, c: MUTE, hasGo: false, noGo: true };
         var c = stOf(o.st)[1];
-        return { t: o.name, s: it.s || o.type, r: it.r || (o.st === 'ok' ? '' : stOf(o.st)[0]), rc: it.rc || (o.st === 'ok' ? MUTE : c), c: c, hasGo: true, noGo: false, go: go(it.ref) };
+        return { t: o.name, s: it.s || o.type, r: it.r || (o.st === 'ok' ? '' : stOf(o.st)[0]), rc: lv(it.rc) || (o.st === 'ok' ? MUTE : c), c: c, hasGo: true, noGo: false, go: go(it.ref) };
       }
-      return { t: it.t, s: it.s, r: it.r, rc: it.rc || MUTE, c: it.c || OK, hasGo: false, noGo: true };
+      return { t: it.t, s: it.s, r: it.r, rc: lv(it.rc) || MUTE, c: lv(it.c) || OK, hasGo: false, noGo: true };
     };
 
     // ---------- actions ----------
@@ -370,15 +242,9 @@ export function buildView(self) {
     };
 
     // ---------- alerts ----------
-    var ALERTS = [
-      { id: 'a1', sev: 'crit', title: 'k2so WireGuard handshake stale', where: 'k2so · Quicksrv.io', when: '14 min', obj: 'k2so', resolved: K, domain: 'Edge & cloud', action: 'Diagnose' },
-      { id: 'a2', sev: 'warn', title: 'Olympus memory at 91%', where: 'olympus', when: '18 min', obj: 'olympus', resolved: M, domain: 'Hosts', action: 'Rebalance' },
-      { id: 'a3', sev: 'warn', title: 'Delphi GPU 1 VRAM at 101 °C', where: 'delphi', when: '6 min', obj: 'delphi', resolved: false, domain: 'Hardware', action: 'Sensors', tab: 'Hardware' },
-      { id: 'a4', sev: 'warn', title: 'Atlas pool 82% full', where: 'alexandria · Atlas', when: '3 h', obj: 'atlas', resolved: false, domain: 'Storage', action: 'Open pool' },
-      { id: 'a5', sev: 'warn', title: 'sonarr restarting (OOM)', where: 'hermes · sonarr', when: '40 min', obj: 'sonarr', resolved: S, domain: 'Workloads', action: 'Fix' },
-      { id: 'a6', sev: 'info', title: '3 container image updates', where: 'prometheus', when: '1 d', obj: 'prometheus', resolved: false, domain: 'Updates', action: 'Review' }
-    ];
-    if (st.onBatt) ALERTS.unshift({ id: 'a0', sev: 'crit', title: 'Home lab on battery · ' + batt + '% · ' + runtime + ' min left', where: 'ups-rack', when: 'just now', obj: 'ups-home', resolved: false, domain: 'Power', action: 'Open UPS' });
+    var RANK = { crit: 0, warn: 1, info: 2 };
+    var ALERTS = feed('alerts').filter(function (a) { return O[a.obj]; }).map(function (a, i) { return [a, i]; })
+      .sort(function (x, y) { return RANK[x[0].sev] - RANK[y[0].sev] || x[1] - y[1]; }).map(function (x) { return x[0]; });
     var SEVC = { crit: CRIT, warn: WARN, info: INFO };
     var aState = function (a) { return a.resolved ? 'resolved' : (st.silenced[a.id] ? 'silenced' : (st.acked[a.id] ? 'acked' : 'open')); };
     var openAlerts = ALERTS.filter(function (a) { return aState(a) === 'open' && a.sev !== 'info'; });
@@ -387,7 +253,7 @@ export function buildView(self) {
     var goAlert = function (a) { return function () { self.setState({ route: 'obj', obj: a.obj, tab: a.tab || 'Overview', bell: false, palette: false }); }; };
 
     // ---------- drift ----------
-    var DRIFT = [['hermes', 'Memory', '6 GB', '8 GB'], ['apollo', 'Memory', '12 GB', '16 GB'], ['apollo', 'PCI passthrough', 'none', 'Iris Xe'], ['vlan1', 'olympus mgmt IP on VLAN 1', 'VLAN 5', 'VLAN 1'], ['vlan30', 'Undeclared IPs', '—', '.87 · .88 · .91']];
+    var DRIFT = nb.drift || [];
     var openDrift = DRIFT.filter(function (d) { return !st.accepted[d[0]]; });
 
     // ---------- scope filter ----------
@@ -407,19 +273,31 @@ export function buildView(self) {
     var objsOf = function (types) { return Object.keys(O).filter(function (k) { return types.indexOf(O[k].type) >= 0 && inScope(O[k]); }); };
     var chipsFor = function (key, opts) { return opts.map(function (x) { var on = st[key] === x[0]; return { label: x[1], on: on, bg: on ? '#232B36' : 'transparent', fg: on ? TXT : MUTE, pick: function () { var s2 = {}; s2[key] = x[0]; self.setState(s2); } }; }); };
 
+    var mock = st.dataMode !== 'live';
+    var SOURCES = self.integrations || [];
+    var setMode = function (mode) {
+      if (mode === self.state.dataMode) return;
+      // Objects only exist in one mode, so leave an object page when switching.
+      var onObj = self.state.route === 'obj';
+      self.setState({ dataMode: mode, route: onObj ? 'home' : self.state.route, obj: onObj ? null : self.state.obj, bell: false });
+    };
+    var siteName = function (site) { var o = O[site === 'b' ? 'siteb' : 'home']; return o ? o.name : (site === 'b' ? 'Site B' : 'Home lab'); };
+    var tileOf = function (t) { return { l: t.l, v: t.v, c: lv(t.c), s: t.s }; };
     var PAGES = {
       sites: function () { return { title: 'Sites & WAN', desc: 'Every location and its uplinks', tables: [table('', ['Site', 'Gateway', 'Internet', 'Link to home', 'Status'], 'minmax(140px,1.2fr) 1fr 1.4fr 1fr 0.8fr',
-        objsOf(['Site']).map(function (k) { var b = k === 'siteb'; return row(k, [cell(b ? 'UDM Pro SE' : 'UDM Pro Max'), cell(b ? 'Mobile Vikings · single' : 'DIGI 10G + 5G backup', b ? WARN : null), cell(b ? 'Site Magic · 18 ms' : '—'), cell(stOf(O[k].st)[0], stOf(O[k].st)[1])]); }))] }; },
+        objsOf(['Site']).map(function (k) { var t = O[k].table; return row(k, [cell(t.gateway), cell(t.internet, lv(t.internetLv) || null), cell(t.link), cell(stOf(O[k].st)[0], stOf(O[k].st)[1])]); }))] }; },
       hosts: function () { return { title: 'Hosts', desc: 'Physical machines across sites', tables: [table('', ['Host', 'Role', 'Site', 'Key metric', 'Status'], 'minmax(140px,1fr) 1.6fr 0.8fr 1.2fr 0.8fr',
         objsOf(['Host']).map(function (k) {
           var o = O[k], c0 = o.tabs.Overview[0], km = '—', kc = null;
           if (c0.type === 'bars') { var it = c0.items[c0.items.length > 1 ? 1 : 0]; km = it.l + ' · ' + it.v; kc = it.c === OK ? null : it.c; }
-          return row(k, [cell(o.sub.split(' · ').slice(1, 3).join(' · ')), cell(O[o.site === 'b' ? 'siteb' : 'home'].name), cell(km, kc, true), cell(stOf(o.st)[0], stOf(o.st)[1])], { op: o.st === 'plan' ? '0.6' : '1' });
+          return row(k, [cell(o.sub.split(' · ').slice(1, 3).join(' · ')), cell(siteName(o.site)), cell(km, kc, true), cell(stOf(o.st)[0], stOf(o.st)[1])], { op: o.st === 'plan' ? '0.6' : '1' });
         }))] }; },
-      storage: function () { return { title: 'Storage', desc: 'Pools, volumes and where the data goes', tiles: [{ l: 'Atlas', v: '82%', c: WARN, s: '65 / 80 TB · RAIDZ-2' }, { l: 'Synology (Site B)', v: '61%', c: TXT, s: 'SHR-2 · offsite' }, { l: 'Offsite replication', v: st.rep === 'done' ? 'just now' : '02:47', c: OK, s: 'Atlas → Synology' }],
-        tables: [table('Pools & volumes', ['Pool', 'Host', 'Used', 'Status'], 'minmax(140px,1fr) 1fr 1fr 0.8fr', [row('atlas', [cell('alexandria'), cell('65 / 80 TB', WARN, true), cell('Warning', WARN)]), row('synology', [cell('Site B'), cell('61%', null, true), cell('Healthy', OK)], { name: 'Synology volume1' })].filter(function (r, i) { return st.scope === 'all' || (st.scope === 'b' ? i === 1 : i === 0); }))] }; },
+      storage: function () { return { title: 'Storage', desc: 'Pools, volumes and where the data goes', tiles: feed('storageTiles').map(tileOf),
+        tables: [table('Pools & volumes', ['Pool', 'Host', 'Used', 'Status'], 'minmax(140px,1fr) 1fr 1fr 0.8fr', feed('volumes').filter(function (v) { return st.scope === 'all' || v.site === st.scope; }).map(function (v) {
+          return row(v.obj, [cell(v.host), cell(v.used, lv(v.usedLv) || null, true), cell(v.status, lv(v.statusLv))], v.name ? { name: v.name } : {});
+        }))] }; },
       network: function () { return { title: 'Network', desc: 'Gateways, switches, VLANs and policy', tables: [
-        table('Devices', ['Device', 'Role', 'Site', 'Status'], 'minmax(160px,1fr) 1.6fr 0.8fr 0.8fr', objsOf(['Network device']).map(function (k) { return row(k, [cell(O[k].sub), cell(O[k].site === 'b' ? 'Site B' : 'Home lab'), cell(stOf(O[k].st)[0], stOf(O[k].st)[1])]); })),
+        table('Devices', ['Device', 'Role', 'Site', 'Status'], 'minmax(160px,1fr) 1.6fr 0.8fr 0.8fr', objsOf(['Network device']).map(function (k) { return row(k, [cell(O[k].sub), cell(siteName(O[k].site)), cell(stOf(O[k].st)[0], stOf(O[k].st)[1])]); })),
         table('VLANs', ['VLAN', 'Subnet · zone', 'Members', 'Status'], 'minmax(180px,1.2fr) 1.4fr 0.6fr 0.8fr', objsOf(['VLAN']).map(function (k) { return row(k, [cell(O[k].sub, null, true), cell(String(O[k].tabs.Members[0].items.length)), cell(O[k].st === 'warn' ? 'Drift' : 'In sync', O[k].st === 'warn' ? WARN : OK)]); }))] }; },
       edge: function () { return { title: 'Edge & cloud', desc: 'Providers, their VPS, and where each tunnel lands', tables: [
         table('Providers', ['Provider', 'Details', 'Status'], 'minmax(160px,1fr) 2fr 0.8fr', objsOf(['Provider']).map(function (k) { return row(k, [cell(O[k].sub), cell(stOf(O[k].st)[0], stOf(O[k].st)[1])]); })),
@@ -445,37 +323,35 @@ export function buildView(self) {
       protection: function () {
         var running = st.rep === 'running';
         var run = function () { if (self.state.rep === 'running') return; self.setState({ rep: 'running', pct: 0 }); clearInterval(self.iv); self.iv = setInterval(function () { var p = self.state.pct + 5; if (p >= 100) { clearInterval(self.iv); self.setState({ rep: 'done', pct: 100 }); } else { self.setState({ pct: p }); } }, 140); };
-        return { title: 'Data protection', desc: 'Backups, snapshots and offsite copies', tiles: [{ l: 'Guests backed up', v: '27 / 27', c: OK, s: 'last night · all OK' }, { l: '3-2-1 complete', v: '24 / 27', c: TXT, s: 'apollo media excluded by design' }, { l: 'Offsite', v: st.rep === 'done' ? 'just now' : '02:47', c: OK, s: 'Atlas → Synology · Site B' }],
-          hasProgress: running, progLabel: 'Atlas → Synology · syncing vault', progPct: st.pct + '%',
-          tables: [table('Jobs & flows', ['Job', 'Target', 'Schedule', 'Last run', ''], 'minmax(200px,1.4fr) 1.4fr 0.8fr 1fr 0.8fr', [
-            { name: 'vzdump · olympus', dot: OK, hasGo: true, noGo: false, go: go('olympus'), cells: [cell('alexandria · nexus/backups'), cell('03:00'), cell('today · 11 guests OK', OK)], actions: [], op: '1' },
-            { name: 'vzdump · prometheus', dot: OK, hasGo: true, noGo: false, go: go('prometheus'), cells: [cell('alexandria · nexus/backups'), cell('03:30'), cell('today · 5 guests OK', OK)], actions: [], op: '1' },
-            { name: 'Atlas → Synology (rsync)', dot: OK, hasGo: true, noGo: false, go: go('atlas'), cells: [cell('Site B · /volume1/atlas-offsite'), cell('02:00'), cell(st.rep === 'done' ? 'just now · 1.2 GB' : 'today 02:47 · 38 GB', OK)], actions: [btn(running ? 'Running…' : 'Run now', run, true)], op: '1' },
-            { name: 'Atlas snapshots', dot: OK, hasGo: true, noGo: false, go: go('atlas'), cells: [cell('local'), cell('hourly'), cell('10:00 · OK', OK)], actions: [], op: '1' },
-            { name: 'Synology snapshots', dot: OK, hasGo: true, noGo: false, go: go('synology'), cells: [cell('Site B'), cell('daily'), cell('today 04:00 · OK', OK)], actions: [], op: '1' }
-          ], '860px')] };
+        var jobs = feed('backupJobs'), live = jobs.filter(function (j) { return j.runnable; })[0];
+        return { title: 'Data protection', desc: 'Backups, snapshots and offsite copies', tiles: feed('backupTiles').map(tileOf),
+          hasProgress: running && !!live, progLabel: live ? live.progressLabel : '', progPct: st.pct + '%',
+          tables: [table('Jobs & flows', ['Job', 'Target', 'Schedule', 'Last run', ''], 'minmax(200px,1.4fr) 1.4fr 0.8fr 1fr 0.8fr', jobs.map(function (j) {
+            return { name: j.name, dot: OK, hasGo: !!O[j.obj], noGo: !O[j.obj], go: go(j.obj), cells: [cell(j.target), cell(j.schedule), cell(j.last, OK)], actions: j.runnable ? [btn(running ? 'Running…' : 'Run now', run, true)] : [], op: '1' };
+          }), '860px')] };
       },
       drift: function () {
-        return { title: 'Drift & CMDB', desc: 'Where reality differs from NetBox', tiles: [{ l: 'Objects in NetBox', v: '312', c: TXT, s: 'synced 5 min ago' }, { l: 'Differences', v: String(openDrift.length), c: openDrift.length ? WARN : OK, s: openDrift.length ? 'review below' : 'all in sync' }],
+        return { title: 'Drift & CMDB', desc: 'Where reality differs from NetBox', tiles: [{ l: 'Objects in NetBox', v: nb.objectCount || '—', c: TXT, s: nb.synced || 'not connected' }, { l: 'Differences', v: String(openDrift.length), c: openDrift.length ? WARN : OK, s: openDrift.length ? 'review below' : 'all in sync' }],
           tables: [table('', ['Object', 'Field', 'NetBox', 'Observed', ''], 'minmax(120px,0.8fr) 1.4fr 0.8fr 1fr 1.2fr', DRIFT.map(function (d) {
             var done = st.accepted[d[0]];
             return row(d[0], [cell(d[1]), cell(done ? d[3] : d[2], null, true), cell(d[3], done ? OK : WARN, true)], { dot: done ? OK : WARN, actions: done ? [] : [btn('Accept observed', act('accept:' + d[0]), true)], op: done ? '0.6' : '1' });
           }), '820px')] };
       },
       updates: function () {
-        var U = [['olympus', 'Kernel 6.8 · reboot pending', 'Proxmox'], ['alexandria', 'TrueNAS Scale point release', 'TrueNAS'], ['udm', 'UniFi OS firmware', 'UniFi'], ['prometheus', '3 container images', 'Docker'], ['synology', 'DSM update', 'Synology']];
+        var U = feed('updates').filter(function (u) { return O[u[0]]; });
         return { title: 'Updates & maintenance', desc: 'Pending updates and maintenance windows', tables: [table('', ['Object', 'Update', 'Source', ''], 'minmax(130px,0.8fr) 1.6fr 0.8fr 1.4fr', U.filter(function (u) { return inScope(O[u[0]]); }).map(function (u) {
           var on = st.sched[u[0]];
           return row(u[0], [cell(u[1]), cell(u[2])], { actions: [btn(on ? 'Scheduled · Sun 03:00' : 'Schedule for Sun 03:00', function () { var m = Object.assign({}, self.state.sched); m[u[0]] = !m[u[0]]; self.setState({ sched: m }); }, !on)] });
         }), '720px')] };
       },
       sources: function () {
-        var SRC = [['Proxmox VE API', '4 nodes', '2 s', OK], ['UniFi Network', '2 sites', '5 s', OK], ['TrueNAS API', 'alexandria', '10 s', OK], ['VictoriaMetrics', 'node_exporter · DCGM', '15 s', OK], ['Docker agents', '9 hosts', '15 s', OK], ['Uptime Kuma', '22 probes', '30 s', OK], ['Tailscale', 'token expires in 6 d', '1 min', WARN], ['Cloudflare', '4 zones', '1 min', OK], ['NetBox', 'CMDB / IPAM', '5 min', OK], ['Synology DSM', 'via Site Magic', '30 s', OK]];
-        return { title: 'Data sources', desc: 'Everything Pantheon reads from', tables: [table('', ['Source', 'Covers', 'Last sync', ''], 'minmax(170px,1.2fr) 1.4fr 0.8fr 0.8fr', SRC.map(function (s) {
-          var off = st.off[s[0]];
-          return { name: s[0], dot: off ? MUTE : s[3], hasGo: false, noGo: true, go: function () {}, op: off ? '0.55' : '1', cells: [cell(s[1], s[3] === WARN && !off ? WARN : null), cell(off ? 'paused' : s[2])],
-            actions: [btn(off ? 'Resume' : 'Pause', function () { var m = Object.assign({}, self.state.off); m[s[0]] = !m[s[0]]; self.setState({ off: m }); })] };
-        }), '720px')] };
+        return { title: 'Data sources', desc: mock ? 'Everything Pantheon reads from · showing mock data for every integration' : 'Everything Pantheon reads from · live mode, no integration is connected yet',
+          chips: [['mock', 'Mock data'], ['live', 'Live data']].map(function (x) { var on = st.dataMode === x[0]; return { label: x[1], on: on, bg: on ? '#232B36' : 'transparent', fg: on ? TXT : MUTE, pick: function () { setMode(x[0]); } }; }),
+          tables: [table('', ['Source', 'Covers', mock ? 'Polls every' : 'Status', ''], 'minmax(170px,1.2fr) 2fr 0.8fr 0.8fr', SOURCES.map(function (s) {
+            var off = st.off[s.id], warn = mock && s.health === 'warn' && !off;
+            return { name: s.name, dot: !mock || off ? MUTE : (warn ? WARN : OK), hasGo: false, noGo: true, go: function () {}, op: off ? '0.55' : '1', cells: [cell(s.covers, warn ? WARN : null), cell(off ? 'paused' : (mock ? s.sync : 'not connected'))],
+              actions: mock ? [btn(off ? 'Resume' : 'Pause', function () { var m = Object.assign({}, self.state.off); m[s.id] = !m[s.id]; self.setState({ off: m }); })] : [] };
+          }), '760px')] };
       },
       notifications: function () {
         var N = [['ntfy', 'ntfy · phone push', 'critical + warning'], ['email', 'Email · daily digest', 'all'], ['quiet', 'Quiet hours 23:00–07:00', 'critical still pushes'], ['slack', 'Slack · #homelab', 'critical only']];
@@ -536,7 +412,7 @@ export function buildView(self) {
       var sc = stOf(ob.st);
       var actions = [];
       if (ob.type === 'Host' && ob.tabs.Hardware && ob.tabs.Hardware.length) actions.push(btn('Hardware', function () { self.setState({ tab: 'Hardware' }); }));
-      if (st.obj === 'k2so' && !K) actions.push(btn('Diagnose', function () { self.setState({ tab: 'Diagnostics' }); }, true));
+      if (ob.needsDiag) actions.push(btn('Diagnose', function () { self.setState({ tab: 'Diagnostics' }); }, true));
       if (st.obj === 'ups-home') actions.push(btn(st.onBatt ? 'Restore mains' : 'Simulate power cut', act('powercut'), !st.onBatt));
       if (ob.type === 'VM' || ob.type === 'LXC') actions.push(btn('Console', function () {}));
       if (SECTION[ob.type] === 'hosts' || ob.type === 'Site') actions.push(btn('Show on map', to('topology')));
@@ -566,15 +442,19 @@ export function buildView(self) {
     var price = parseFloat(String(st.price).replace(',', '.')) || 0;
     var ob = st.onBatt;
     var dW = ob ? 0 : (st.cap ? 642 : 762);
-    var PWD = [
-      { id: 'olympus', w: M ? 60 : 72, src: 'plug', b: 'ups' }, { id: 'alexandria', w: 168, src: 'ipmi', b: 'ups' }, { id: 'prometheus', w: M ? 118 : 96, src: 'plug', b: 'ups' },
-      { id: 'udm', w: 48, src: 'est', b: 'ups' }, { id: 'agg', w: 22, src: 'est', b: 'ups' },
-      { id: 'delphi', w: dW, src: 'gpu', b: 'wall' }, { id: 'kronos', w: ob ? 0 : 142, src: 'plug', b: 'wall' }, { id: 'access', w: ob ? 0 : 30, src: 'poe', b: 'wall' }, { name: 'Pis & office hifi', w: ob ? 0 : 10, src: 'est', b: 'wall' },
-      { id: 'synology', w: 38, src: 'dsm', b: 'siteb' }, { id: 'udmse', w: 25, src: 'est', b: 'siteb' }
-    ];
+    // Each reading sits on the branch of the UPS that feeds it; everything else is on the wall circuit.
+    PWD = PWD.filter(function (r) { return !r.id || O[r.id]; }).map(function (r) {
+      var u = upsOf[r.id];
+      return Object.assign({ b: u === 'ups-home' ? 'ups' : (u === 'ups-b' ? 'siteb' : 'wall') }, r);
+    });
+    // Grouped by branch; inside a branch hosts first, then other devices, then unnamed loads.
+    var regIdx = Object.keys(O), brRank = { ups: 0, wall: 1, siteb: 2 };
+    var pKey = function (r) { var o = O[r.id]; return brRank[r.b] * 1e6 + (!o ? 2 : (o.type === 'Host' ? 0 : 1)) * 1e4 + (o ? regIdx.indexOf(r.id) : 0); };
+    PWD.sort(function (x, y) { return pKey(x) - pKey(y); });
     var SRCM = { plug: ['Smart plug · HA', '#3FB95022', OK], ipmi: ['IPMI', '#3FB95022', OK], gpu: ['Plug + DCGM', '#3FB95022', OK], dsm: ['DSM API', '#3FB95022', OK], poe: ['UniFi PoE budget', '#E3B34122', WARN], est: ['Estimate · spec', '#232B36', MUTE] };
     var BR = { ups: { t: 'ups-rack · on UPS', sub: 'Home lab · protected', c: '#4C9AFF', go: 'ups-home', over: 14 }, wall: { t: 'Wall circuit', sub: 'Home lab · not protected', c: '#F0883E' }, siteb: { t: 'ups-siteb · on UPS', sub: 'Site B · protected', c: '#3FC4B0', go: 'ups-b', over: 4 } };
-    var brKeys = st.scope === 'b' ? ['siteb'] : (st.scope === 'home' ? ['ups', 'wall'] : ['ups', 'wall', 'siteb']);
+    var brKeys = (st.scope === 'b' ? ['siteb'] : (st.scope === 'home' ? ['ups', 'wall'] : ['ups', 'wall', 'siteb'])).filter(function (k) { return k === 'wall' || O[BR[k].go]; });
+    if (!brKeys.length) brKeys = ['wall'];
     var pRows = PWD.filter(function (r) { return brKeys.indexOf(r.b) >= 0; });
     var pwTotal = pRows.reduce(function (a, r) { return a + r.w; }, 0) + brKeys.reduce(function (a, k) { return a + (BR[k].over || 0); }, 0);
     var maxW = Math.max.apply(null, pRows.map(function (r) { return r.w; }).concat([1]));
@@ -611,14 +491,14 @@ export function buildView(self) {
       { l: 'Drawing now', v: pwTotal + ' W', c: ob ? CRIT : TXT, s: brKeys.length > 1 ? brKeys.map(function (k) { return BR[k].t.split(' · ')[0]; }).join(' + ') : BR[brKeys[0]].t },
       { l: 'Today so far', v: (pwTotal * 11 / 1000).toFixed(1) + ' kWh', c: TXT, s: 'since midnight' },
       { l: 'Month at this rate', v: euro(monthKwh * price), c: TXT, s: monthKwh + ' kWh × € ' + price.toFixed(2) },
-      st.scope === 'b' ? { l: 'ups-siteb', v: '100% · 42 min', c: OK, s: '62 W / 360 W' } : { l: 'ups-rack', v: ob ? 'ON BATTERY · ' + batt + '%' : batt + '% · ' + runtime + ' min', c: ob ? CRIT : OK, s: '420 / 1000 W · runtime at this load' },
+    ].concat(st.scope === 'b' ? (O['ups-b'] ? [{ l: 'ups-siteb', v: '100% · 42 min', c: OK, s: '62 W / 360 W' }] : []) : (upsHome ? [{ l: 'ups-rack', v: ob ? 'ON BATTERY · ' + batt + '%' : batt + '% · ' + runtime + ' min', c: ob ? CRIT : OK, s: '420 / 1000 W · runtime at this load' }] : [])).concat([
       { l: 'Measured, not estimated', v: cov + '%', c: cov < 90 ? WARN : OK, s: estN + ' devices estimated' }
-    ];
+    ]);
     var insights = [];
     if (brKeys.indexOf('wall') >= 0) insights.push({ t: 'Delphi is ' + Math.round(dW / Math.max(pwTotal, 1) * 100) + '% of the draw', bd: '#5A4A1F',
       text: ob ? 'Delphi lost power with the mains: it is not on the UPS.' : (st.cap ? 'Both 3090s are capped at 300 W. Saving ~' + capSave + ' kWh/month (≈ ' + euro(capSave * price) + ') for a few % fewer tokens/s.' : 'Capping both 3090s at 300 W usually costs under 5% tokens/s and saves ~' + capSave + ' kWh/month (≈ ' + euro(capSave * price) + '). It also cools GPU 1 memory.'),
       hasBtn: !ob, btn: st.cap ? 'Remove cap' : 'Apply 300 W GPU cap', fn: function () { self.setState({ cap: !self.state.cap }); }, bg: st.cap ? '#161B22' : '#4C9AFF', fg: st.cap ? TXT : '#0E1116', bdb: st.cap ? '#2A313C' : '#4C9AFF' });
-    if (st.scope !== 'b') insights.push({ t: ob ? 'Running on battery' : 'UPS headroom', bd: ob ? '#6B2A2A' : '#2A313C',
+    if (st.scope !== 'b' && upsHome) insights.push({ t: ob ? 'Running on battery' : 'UPS headroom', bd: ob ? '#6B2A2A' : '#2A313C',
       text: ob ? 'ups-rack carries the core at ' + batt + '%: ~' + runtime + ' min left. Shutdown steps trigger at 50% and at 5 minutes.' : 'ups-rack is 42% loaded: 18 min of runtime for the core. Delphi alone would overload it, so GPU boxes stay on the wall.',
       hasBtn: true, btn: ob ? 'Restore mains' : 'Simulate power cut', fn: act('powercut'), bg: ob ? '#4C9AFF' : '#161B22', fg: ob ? '#0E1116' : TXT, bdb: ob ? '#4C9AFF' : '#2A313C' });
     insights.push({ t: 'Close the measurement gaps', bd: '#2A313C', text: 'The UDM, the aggregation switch and the Pis are estimated from datasheets. Two smart plugs, or one metered PDU strip in the rack, would make the whole lab measured.',
@@ -641,8 +521,8 @@ export function buildView(self) {
 
     // ---------- home ----------
     var attention = ALERTS.filter(function (a) { return aState(a) === 'open' && inScope(O[a.obj]); }).map(function (a) { return { c: SEVC[a.sev], title: a.title, domain: a.domain, where: a.where, when: a.when, action: a.action, go: goAlert(a) }; });
-    if (openDrift.length && st.scope !== 'b') attention.push({ c: INFO, title: openDrift.length + ' differences with NetBox', domain: 'Drift & CMDB', where: 'apollo · hermes · VLAN 1 · VLAN 30', when: 'today', action: 'Review', go: to('drift') });
-    if (st.scope !== 'home') attention.push({ c: INFO, title: 'Site B has a single uplink', domain: 'Network', where: 'Mobile Vikings', when: 'ongoing', action: 'Open site', go: go('siteb') });
+    if (openDrift.length && st.scope !== 'b') attention.push({ c: INFO, title: openDrift.length + ' differences with NetBox', domain: 'Drift & CMDB', where: nb.driftSummary, when: 'today', action: 'Review', go: to('drift') });
+    if (st.scope !== 'home' && O.siteb) attention.push({ c: INFO, title: 'Site B has a single uplink', domain: 'Network', where: 'Mobile Vikings', when: 'ongoing', action: 'Open site', go: go('siteb') });
     var scopedCrit = attention.filter(function (a) { return a.c === CRIT; }).length, scopedWarn = attention.filter(function (a) { return a.c === WARN; }).length;
     var overall = scopedCrit ? { label: 'Degraded · ' + scopedCrit + ' critical', c: CRIT } : (scopedWarn ? { label: scopedWarn + ' warning' + (scopedWarn > 1 ? 's' : ''), c: WARN } : { label: 'All healthy', c: OK });
     overall.tint = overall.c + '22';
@@ -657,19 +537,14 @@ export function buildView(self) {
       dom('Storage', st.scope === 'b' ? ['synology'] : ['atlas'], st.scope === 'b' ? '61%' : '82%', st.scope === 'b' ? 'Synology' : 'Atlas used', st.scope === 'all' ? '2' : '1', 'pools', 'offsite replication OK', 'storage'),
       dom('Network', objsOf(['VLAN']).concat(objsOf(['Network device'])), String(objsOf(['VLAN']).length), 'VLANs', String(objsOf(['Network device']).length), 'devices', 'VLAN 5 & 666 still planned', 'network')
     ];
-    if (st.scope !== 'b') domains.push(dom('Edge & cloud', ['k2so', 'chopper', 'r2d2', 'c3po', 'bb8'], '9', 'VPS', '4', 'providers', K ? 'all tunnels up' : 'k2so tunnel stale', 'edge'));
-    domains.push({ t: 'Data protection', c: OK, s: 'OK', v1: '27/27', l1: 'backed up', v2: '3-2-1', l2: 'for 24 guests', note: 'offsite ' + (st.rep === 'done' ? 'just now' : '02:47'), go: to('protection') });
-    if (st.scope !== 'b') domains.push({ t: 'Drift & CMDB', c: openDrift.length ? INFO : OK, s: openDrift.length ? openDrift.length + ' diffs' : 'in sync', v1: '312', l1: 'objects in NetBox', v2: String(openDrift.length), l2: 'differ', note: 'NetBox ↔ observed', go: to('drift') });
+    if (st.scope !== 'b') domains.push(dom('Edge & cloud', ['k2so', 'chopper', 'r2d2', 'c3po', 'bb8'], String(objsOf(['VPS']).length), 'VPS', String(objsOf(['Provider']).length), 'providers', K ? 'all tunnels up' : 'k2so tunnel stale', 'edge'));
+    if (D.proxmox) domains.push({ t: 'Data protection', c: OK, s: 'OK', v1: '27/27', l1: 'backed up', v2: '3-2-1', l2: 'for 24 guests', note: 'offsite ' + (st.rep === 'done' ? 'just now' : '02:47'), go: to('protection') });
+    if (st.scope !== 'b' && D.netbox) domains.push({ t: 'Drift & CMDB', c: openDrift.length ? INFO : OK, s: openDrift.length ? openDrift.length + ' diffs' : 'in sync', v1: nb.objectCount, l1: 'objects in NetBox', v2: String(openDrift.length), l2: 'differ', note: 'NetBox ↔ observed', go: to('drift') });
     var changes = [];
     if (K) changes.push({ t: 'now', k: 'Edge', x: 'k2so peer endpoint updated · tunnel restored', c: OK });
     if (M) changes.push({ t: 'now', k: 'Hosts', x: 'icarus live-migrated olympus → prometheus', c: OK });
     if (S) changes.push({ t: 'now', k: 'Workloads', x: 'sonarr limit raised to 1.5 GB · restarted', c: OK });
-    changes = changes.concat([
-      { t: '10:58', k: 'Workloads', x: 'Watchtower updated 4 images in hermes', c: TXT },
-      { t: '10:28', k: 'Edge', x: 'Quicksrv.io rebooted k2so (provider maintenance)', c: TXT },
-      { t: '03:12', k: 'Backups', x: 'vzdump: 11 guests on olympus · OK', c: TXT },
-      { t: '02:47', k: 'Replication', x: 'Atlas → Synology finished · 38 GB', c: TXT }
-    ]);
+    changes = changes.concat(feed('changes').slice().sort(function (x, y) { return x.t < y.t ? 1 : -1; }).map(function (c) { return { t: c.t, k: c.k, x: c.x, c: TXT }; }));
 
     // ---------- topology ----------
     var D = function (x, y, len, vert, color) { return vert ? { x: x, y: y, w: 0, h: len, bg: 'transparent', bt: 'none', bl: '2px dashed ' + color } : { x: x, y: y, w: len, h: 0, bg: 'transparent', bt: '2px dashed ' + color, bl: 'none' }; };
@@ -706,7 +581,7 @@ export function buildView(self) {
     var tPills = isB ? [P(530, 120, 'FTTH · single uplink'), P(640, 228, 'Site Magic · 18 ms', '#C9A8FF', '#3D2C5C'), P(690, 448, 'rsync from Atlas · nightly', FLOW, '#1F4A44')] :
       [P(150, 164, 'Edge tunnels · WireGuard', '#7DB4FF', '#2A3D57'), P(530, 112, 'XGS-PON · 10G'), P(530, 296, '10 GbE'), P(260, 270, '1 GbE'), P(690, 228, 'Site Magic · 18 ms', '#C9A8FF', '#3D2C5C'), P(994, 412, 'rsync', FLOW, '#1F4A44')];
     var LAYER = { Host: 'compute', 'Network device': 'network', Site: 'network', VLAN: 'network', Provider: 'external', VPS: 'external' };
-    var topoNodes = tNodes.map(function (n) {
+    var topoNodes = tNodes.filter(function (n) { return O[n.id]; }).map(function (n) {
       var o = O[n.id];
       var s = o ? o.st : 'ok';
       var lay = o ? (n.id === 'siteb' && !isB ? 'external' : (n.id === 'home' && isB ? 'external' : LAYER[o.type])) : 'network';
@@ -714,7 +589,7 @@ export function buildView(self) {
       var r = { x: n.x, y: n.y, w: n.w || 152, h: n.h || 136, name: n.name, sub: n.sub, dot: s === 'plan' ? 'transparent' : stOf(s)[1], dotB: s === 'plan' ? '1.5px solid #9AA4B2' : 'none',
         isBtn: n.type !== 'group', isGroup: n.type === 'group', go: go(n.id), bars: n.bars || [], jc: n.type === 'host' ? 'flex-start' : 'center',
         bs: s === 'plan' ? 'dashed' : 'solid', bg: s === 'crit' ? '#1F1416' : (s === 'plan' ? '#12161C' : '#161B22'), op: vis ? '1' : '0.22' };
-      if (n.vps) r.vps = n.vps.map(function (v) { var vo = O[v]; return { n: v, t: '→ ' + vo.sub.split(' → ')[1], c: stOf(vo.st)[1], go: go(v) }; });
+      if (n.vps) r.vps = n.vps.filter(function (v) { return O[v]; }).map(function (v) { var vo = O[v]; return { n: v, t: '→ ' + vo.sub.split(' → ')[1], c: stOf(vo.st)[1], go: go(v) }; });
       return r;
     });
 
@@ -727,10 +602,13 @@ export function buildView(self) {
       ['se', 'Settings', [['sources', 'Data sources', 'DS'], ['notifications', 'Notifications', 'NT']]]
     ];
     var activeSec = route === 'obj' && O[st.obj] ? SECTION[O[st.obj].type] : route;
+    // Sources that are connected, not paused and healthy
+    var srcUp = mock ? SOURCES.filter(function (x) { return !st.off[x.id] && x.health !== 'warn'; }).length : 0;
+    var srcDot = !mock ? MUTE : (srcUp < SOURCES.length ? WARN : OK);
     var dotFor = {
       hosts: stOf(worstOf(objsOf(['Host'])))[1], power: stOf(worstOf(objsOf(['UPS'])))[1], storage: stOf(worstOf(['atlas', 'synology']))[1], network: stOf(worstOf(objsOf(['VLAN'])))[1],
       edge: stOf(worstOf(objsOf(['VPS'])))[1], services: stOf(worstOf(objsOf(['Service'])))[1], guests: stOf(worstOf(guestIds))[1], containers: stOf(worstOf(ctrIds))[1],
-      drift: openDrift.length && st.scope !== 'b' ? INFO : null, sources: WARN
+      drift: openDrift.length && st.scope !== 'b' ? INFO : null, sources: srcDot === OK ? null : srcDot
     };
     var side = st.side;
     var groups = G.map(function (g) {
@@ -755,12 +633,12 @@ export function buildView(self) {
     results = pages.concat(results).slice(0, 10);
 
     var seg = function (cur, key, arr) { return arr.map(function (x) { var on = cur === x[0]; return { label: x[1], dot: x[2], on: on, bg: on ? '#232B36' : 'transparent', fg: on ? TXT : MUTE, pick: function () { var o = {}; o[key] = x[0]; self.setState(o); } }; }); };
-    var offN = Object.keys(st.off).filter(function (k) { return st.off[k]; }).length;
     return {
-      scopes: seg(st.scope, 'scope', [['all', 'All sites', overall.c], ['home', 'Home lab', stOf(O.home.st)[1]], ['b', 'Site B', OK]]),
+      scopes: seg(st.scope, 'scope', [['all', 'All sites', noData ? MUTE : overall.c], ['home', 'Home lab', O.home ? stOf(O.home.st)[1] : MUTE], ['b', 'Site B', O.siteb ? stOf(O.siteb.st)[1] : MUTE]]),
       ranges: seg(st.range, 'range', [['live', 'Live'], ['1 h', '1 h'], ['24 h', '24 h'], ['7 d', '7 d']]),
       rangeLabel: st.range === 'live' ? 'live' : 'last ' + st.range,
-      srcLabel: (10 - offN - 1) + ' / 10 sources', srcDot: WARN, goSources: to('sources'),
+      srcLabel: srcUp + ' / ' + SOURCES.length + ' sources', srcDot: srcDot,
+      noData: noData, mock: { on: mock, toggle: function () { setMode(mock ? 'live' : 'mock'); } }, goSources: to('sources'),
       bell: bell, bellOpen: st.bell, bellEmpty: openAlerts.length === 0,
       bellItems: openAlerts.map(function (a) { return { title: a.title, where: a.where, when: a.when, c: SEVC[a.sev], go: goAlert(a) }; }),
       toggleBell: function () { self.setState({ bell: !self.state.bell, palette: false }); }, goAlerts: to('alerts'), goHome: to('home'),

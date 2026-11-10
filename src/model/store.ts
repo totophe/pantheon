@@ -1,4 +1,5 @@
 import { useMemo, useSyncExternalStore } from 'react';
+import { INTEGRATIONS, emptyData, initialDataMode, mockData, saveDataMode, type Datasets } from '../integrations';
 import { buildView } from './buildView';
 import type { AppState, StoreLike, ViewModel } from './types';
 
@@ -8,6 +9,7 @@ const ROUTES = [
 ];
 
 const initialState: AppState = {
+  dataMode: initialDataMode(),
   route: 'home', obj: null, tab: 'Overview', scope: 'all', range: '24 h', side: true, closed: {},
   bell: false, palette: false, pq: '',
   acked: {}, silenced: {}, accepted: {}, off: {}, sched: {},
@@ -45,9 +47,33 @@ class Store implements StoreLike {
   iv?: ReturnType<typeof setInterval>;
   ivU?: ReturnType<typeof setInterval>;
 
+  readonly integrations = INTEGRATIONS;
+
+  /** What the live clients have delivered so far. */
+  private live: Datasets = emptyData();
+
+  /** Mock mode: every integration's demo dataset. Live mode: only what was really fetched. */
+  get data(): Datasets {
+    return this.state.dataMode === 'mock' ? mockData(this.state) : this.live;
+  }
+
+  /** Ask every integration that has a live client for fresh data. None has one yet. */
+  async refreshLive() {
+    await Promise.all(INTEGRATIONS.map(async (i) => {
+      if (!i.fetch) return;
+      try {
+        this.live = { ...this.live, [i.id]: await i.fetch() };
+      } catch (err) {
+        console.warn(`Pantheon: ${i.name} did not answer`, err);
+      }
+    }));
+    if (this.state.dataMode === 'live') this.setState({});
+  }
+
   private listeners = new Set<() => void>();
 
   constructor() {
+    if (this.state.dataMode === 'live') void this.refreshLive();
     window.addEventListener('hashchange', () => {
       const loc = fromHash(window.location.hash);
       if (toHash(loc) !== toHash(this.state)) {
@@ -64,6 +90,10 @@ class Store implements StoreLike {
       // A tab switch replaces the entry; moving to another page adds one.
       const sameObject = prev.route === this.state.route && prev.obj === this.state.obj;
       window.history[sameObject ? 'replaceState' : 'pushState'](null, '', hash);
+    }
+    if (this.state.dataMode !== prev.dataMode) {
+      saveDataMode(this.state.dataMode);
+      if (this.state.dataMode === 'live') void this.refreshLive();
     }
     this.listeners.forEach((l) => l());
   };

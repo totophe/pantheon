@@ -4,6 +4,8 @@ export type Fn = () => void;
 export type InputHandler = (e: ChangeEvent<HTMLInputElement>) => void;
 
 export interface AppState {
+  /** Global switch: demo datasets for every integration, or live sources only. */
+  dataMode: 'mock' | 'live';
   route: string;
   obj: string | null;
   tab: string;
@@ -40,6 +42,9 @@ export interface AppState {
 /** What buildView() needs from the store. */
 export interface StoreLike {
   state: AppState;
+  /** One dataset per integration, or null where a source has delivered nothing. */
+  data: Record<string, unknown>;
+  integrations: readonly { id: string; name: string; covers: string; sync: string; health?: string }[];
   setState(patch: Partial<AppState>): void;
   nav(route: string, id?: string): void;
 }
@@ -349,6 +354,9 @@ export interface ViewModel {
   rangeLabel: string;
   srcLabel: string;
   srcDot: string;
+  /** No source has delivered anything: there is no inventory to show. */
+  noData: boolean;
+  mock: { on: boolean; toggle: Fn };
   goSources: Fn;
   bell: { show: boolean; n: string; c: string };
   bellOpen: boolean;
