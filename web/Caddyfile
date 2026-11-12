@@ -1,0 +1,17 @@
+# Serves the built frontend and forwards /api to the server container.
+:80 {
+	encode zstd gzip
+
+	handle /api/* {
+		# flush_interval -1 keeps the event stream (/api/events) unbuffered.
+		reverse_proxy {$PANTHEON_API:server:8000} {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

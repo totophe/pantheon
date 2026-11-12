@@ -1,0 +1,21 @@
+# Pantheon: the web container is the only one exposed; it proxies /api to the server.
+services:
+  server:
+    build: ./server
+    restart: unless-stopped
+    environment:
+      # Which integrations serve mock data: "all", "none", or a comma-separated list of ids.
+      PANTHEON_MOCK: ${PANTHEON_MOCK:-all}
+    volumes:
+      - pantheon-data:/data
+
+  web:
+    build: ./web
+    restart: unless-stopped
+    depends_on:
+      - server
+    ports:
+      - "${PANTHEON_PORT:-8080}:80"
+
+volumes:
+  pantheon-data:

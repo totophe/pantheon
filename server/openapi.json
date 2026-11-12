@@ -1,0 +1,2769 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Pantheon",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Api Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/snapshot": {
+      "get": {
+        "summary": "Get Snapshot",
+        "description": "Everything the UI shows. Fetch it again whenever /api/events reports a change.",
+        "operationId": "get_snapshot_api_snapshot_get",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "live",
+                "1 h",
+                "24 h",
+                "7 d"
+              ],
+              "type": "string",
+              "default": "24 h",
+              "title": "Range"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Snapshot"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/events": {
+      "get": {
+        "summary": "Events",
+        "description": "Server-sent events: one message, carrying the new version number, per change.",
+        "operationId": "events_api_events_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/actions/{key}": {
+      "post": {
+        "summary": "Run Action",
+        "description": "Run an action offered by the snapshot (a section's or an object's action key).\n\nActions are simulated against the mock lab for now; none reaches real infrastructure.\nLike every endpoint that changes state, it runs on the event loop: timed actions start\ntasks there, and listeners are notified from there.",
+        "operationId": "run_action_api_actions__key__post",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/toggles/{group}/{key}": {
+      "post": {
+        "summary": "Toggle",
+        "description": "Flip one of Pantheon's own flags: acked, silenced, off (pause a source), sched, notif.",
+        "operationId": "toggle_api_toggles__group___key__post",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Group"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/price": {
+      "put": {
+        "summary": "Set Price",
+        "description": "Electricity tariff in €/kWh, as typed.",
+        "operationId": "set_price_api_settings_price_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PriceIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Alert": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "sev": {
+            "type": "string",
+            "enum": [
+              "crit",
+              "warn",
+              "info"
+            ],
+            "title": "Sev"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "where": {
+            "type": "string",
+            "title": "Where"
+          },
+          "when": {
+            "type": "string",
+            "title": "When"
+          },
+          "obj": {
+            "type": "string",
+            "title": "Obj"
+          },
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "tab": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tab"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "acked",
+              "silenced",
+              "resolved"
+            ],
+            "title": "State"
+          },
+          "acked": {
+            "type": "boolean",
+            "title": "Acked"
+          },
+          "silenced": {
+            "type": "boolean",
+            "title": "Silenced"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "sev",
+          "title",
+          "where",
+          "when",
+          "obj",
+          "domain",
+          "action",
+          "tab",
+          "state",
+          "acked",
+          "silenced"
+        ],
+        "title": "Alert"
+      },
+      "BackupJob": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "obj": {
+            "type": "string",
+            "title": "Obj"
+          },
+          "target": {
+            "type": "string",
+            "title": "Target"
+          },
+          "schedule": {
+            "type": "string",
+            "title": "Schedule"
+          },
+          "last": {
+            "type": "string",
+            "title": "Last"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "obj",
+          "target",
+          "schedule",
+          "last",
+          "action"
+        ],
+        "title": "BackupJob"
+      },
+      "Backups": {
+        "properties": {
+          "tiles": {
+            "items": {
+              "$ref": "#/components/schemas/Tile"
+            },
+            "type": "array",
+            "title": "Tiles"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/BackupJob"
+            },
+            "type": "array",
+            "title": "Jobs"
+          },
+          "running": {
+            "type": "boolean",
+            "title": "Running"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Progress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "tiles",
+          "jobs",
+          "running",
+          "progress"
+        ],
+        "title": "Backups"
+      },
+      "BarsSection": {
+        "properties": {
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "wide": {
+            "type": "boolean",
+            "title": "Wide"
+          },
+          "type": {
+            "type": "string",
+            "const": "bars",
+            "title": "Type"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Meter"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "wide",
+          "type",
+          "items"
+        ],
+        "title": "BarsSection"
+      },
+      "BoardSection": {
+        "properties": {
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "wide": {
+            "type": "boolean",
+            "title": "Wide"
+          },
+          "type": {
+            "type": "string",
+            "const": "board",
+            "title": "Type"
+          },
+          "layout": {
+            "$ref": "#/components/schemas/ThermalLayout"
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "wide",
+          "type",
+          "layout"
+        ],
+        "title": "BoardSection"
+      },
+      "Change": {
+        "properties": {
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "k": {
+            "type": "string",
+            "title": "K"
+          },
+          "x": {
+            "type": "string",
+            "title": "X"
+          },
+          "lv": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "warn",
+                  "crit",
+                  "info",
+                  "mute",
+                  "text"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lv"
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "k",
+          "x",
+          "lv"
+        ],
+        "title": "Change"
+      },
+      "Channel": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "sends": {
+            "type": "string",
+            "title": "Sends"
+          },
+          "on": {
+            "type": "boolean",
+            "title": "On"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "sends",
+          "on"
+        ],
+        "title": "Channel"
+      },
+      "ChartSection": {
+        "properties": {
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "wide": {
+            "type": "boolean",
+            "title": "Wide"
+          },
+          "type": {
+            "type": "string",
+            "const": "chart",
+            "title": "Type"
+          },
+          "value": {
+            "type": "number",
+            "title": "Value"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "warn": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warn"
+          },
+          "max": {
+            "type": "number",
+            "title": "Max"
+          },
+          "values": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Values"
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "wide",
+          "type",
+          "value",
+          "unit",
+          "warn",
+          "max",
+          "values"
+        ],
+        "title": "ChartSection"
+      },
+      "Cmdb": {
+        "properties": {
+          "objectCount": {
+            "type": "string",
+            "title": "Objectcount"
+          },
+          "synced": {
+            "type": "string",
+            "title": "Synced"
+          },
+          "drift": {
+            "items": {
+              "$ref": "#/components/schemas/DriftItem"
+            },
+            "type": "array",
+            "title": "Drift"
+          }
+        },
+        "type": "object",
+        "required": [
+          "objectCount",
+          "synced",
+          "drift"
+        ],
+        "title": "Cmdb"
+      },
+      "Domain": {
+        "properties": {
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "lv": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warn",
+              "crit",
+              "info",
+              "mute",
+              "text"
+            ],
+            "title": "Lv"
+          },
+          "s": {
+            "type": "string",
+            "title": "S"
+          },
+          "v1": {
+            "type": "string",
+            "title": "V1"
+          },
+          "l1": {
+            "type": "string",
+            "title": "L1"
+          },
+          "v2": {
+            "type": "string",
+            "title": "V2"
+          },
+          "l2": {
+            "type": "string",
+            "title": "L2"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "route": {
+            "type": "string",
+            "title": "Route"
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "lv",
+          "s",
+          "v1",
+          "l1",
+          "v2",
+          "l2",
+          "note",
+          "route"
+        ],
+        "title": "Domain"
+      },
+      "DriftItem": {
+        "properties": {
+          "obj": {
+            "type": "string",
+            "title": "Obj"
+          },
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "declared": {
+            "type": "string",
+            "title": "Declared"
+          },
+          "observed": {
+            "type": "string",
+            "title": "Observed"
+          },
+          "accepted": {
+            "type": "boolean",
+            "title": "Accepted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "obj",
+          "field",
+          "declared",
+          "observed",
+          "accepted"
+        ],
+        "title": "DriftItem"
+      },
+      "Entry": {
+        "properties": {
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "t": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "T"
+          },
+          "s": {
+            "type": "string",
+            "title": "S"
+          },
+          "r": {
+            "type": "string",
+            "title": "R"
+          },
+          "c": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "warn",
+                  "crit",
+                  "info",
+                  "mute",
+                  "text"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "C"
+          },
+          "rc": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "warn",
+                  "crit",
+                  "info",
+                  "mute",
+                  "text"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rc"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ref",
+          "t",
+          "s",
+          "r",
+          "c",
+          "rc"
+        ],
+        "title": "Entry",
+        "description": "A list row: a reference to another object (`ref`) or free text (`t`)."
+      },
+      "Fact": {
+        "properties": {
+          "k": {
+            "type": "string",
+            "title": "K"
+          },
+          "v": {
+            "type": "string",
+            "title": "V"
+          },
+          "lv": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "warn",
+                  "crit",
+                  "info",
+                  "mute",
+                  "text"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lv"
+          }
+        },
+        "type": "object",
+        "required": [
+          "k",
+          "v",
+          "lv"
+        ],
+        "title": "Fact"
+      },
+      "Fan": {
+        "properties": {
+          "l": {
+            "type": "string",
+            "title": "L"
+          },
+          "rpm": {
+            "type": "integer",
+            "title": "Rpm"
+          }
+        },
+        "type": "object",
+        "required": [
+          "l",
+          "rpm"
+        ],
+        "title": "Fan"
+      },
+      "FansSection": {
+        "properties": {
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "wide": {
+            "type": "boolean",
+            "title": "Wide"
+          },
+          "type": {
+            "type": "string",
+            "const": "fans",
+            "title": "Type"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Fan"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "wide",
+          "type",
+          "items"
+        ],
+        "title": "FansSection"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Insight": {
+        "properties": {
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "tone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "warn",
+                  "crit",
+                  "ok"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tone"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InsightAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "tone",
+          "text",
+          "action"
+        ],
+        "title": "Insight"
+      },
+      "InsightAction": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "primary": {
+            "type": "boolean",
+            "title": "Primary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "key",
+          "route",
+          "primary"
+        ],
+        "title": "InsightAction"
+      },
+      "KvSection": {
+        "properties": {
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "wide": {
+            "type": "boolean",
+            "title": "Wide"
+          },
+          "type": {
+            "type": "string",
+            "const": "kv",
+            "title": "Type"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Fact"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "wide",
+          "type",
+          "items"
+        ],
+        "title": "KvSection"
+      },
+      "Legend": {
+        "properties": {
+          "series": {
+            "type": "integer",
+            "title": "Series"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "series",
+          "label"
+        ],
+        "title": "Legend"
+      },
+      "ListSection": {
+        "properties": {
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "wide": {
+            "type": "boolean",
+            "title": "Wide"
+          },
+          "type": {
+            "type": "string",
+            "const": "list",
+            "title": "Type"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Entry"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "wide",
+          "type",
+          "items",
+          "action"
+        ],
+        "title": "ListSection"
+      },
+      "Meter": {
+        "properties": {
+          "l": {
+            "type": "string",
+            "title": "L"
+          },
+          "pct": {
+            "type": "number",
+            "title": "Pct"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "lv": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "warn",
+                  "crit",
+                  "info",
+                  "mute",
+                  "text"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lv"
+          }
+        },
+        "type": "object",
+        "required": [
+          "l",
+          "pct",
+          "text",
+          "lv"
+        ],
+        "title": "Meter"
+      },
+      "Method": {
+        "properties": {
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "d": {
+            "type": "string",
+            "title": "D"
+          },
+          "acc": {
+            "type": "string",
+            "title": "Acc"
+          },
+          "lv": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warn",
+              "crit",
+              "info",
+              "mute",
+              "text"
+            ],
+            "title": "Lv"
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "d",
+          "acc",
+          "lv"
+        ],
+        "title": "Method"
+      },
+      "NoteSection": {
+        "properties": {
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "wide": {
+            "type": "boolean",
+            "title": "Wide"
+          },
+          "type": {
+            "type": "string",
+            "const": "note",
+            "title": "Type"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "tone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "warn",
+                  "crit",
+                  "ok"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tone"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "wide",
+          "type",
+          "text",
+          "tone",
+          "action"
+        ],
+        "title": "NoteSection"
+      },
+      "Notice": {
+        "properties": {
+          "lv": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warn",
+              "crit",
+              "info",
+              "mute",
+              "text"
+            ],
+            "title": "Lv"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "where": {
+            "type": "string",
+            "title": "Where"
+          },
+          "when": {
+            "type": "string",
+            "title": "When"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "obj": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Obj"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lv",
+          "title",
+          "domain",
+          "where",
+          "when",
+          "action",
+          "route",
+          "obj"
+        ],
+        "title": "Notice"
+      },
+      "Object": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "ab": {
+            "type": "string",
+            "title": "Ab"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "site": {
+            "type": "string",
+            "title": "Site"
+          },
+          "st": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warn",
+              "crit",
+              "plan",
+              "off"
+            ],
+            "title": "St"
+          },
+          "sub": {
+            "type": "string",
+            "title": "Sub"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "prov": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prov"
+          },
+          "ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ip"
+          },
+          "needsDiag": {
+            "type": "boolean",
+            "title": "Needsdiag"
+          },
+          "table": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SiteRow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectAction"
+            },
+            "type": "array",
+            "title": "Actions"
+          },
+          "tabs": {
+            "items": {
+              "$ref": "#/components/schemas/Tab"
+            },
+            "type": "array",
+            "title": "Tabs"
+          },
+          "rel": {
+            "items": {
+              "$ref": "#/components/schemas/RelGroup"
+            },
+            "type": "array",
+            "title": "Rel"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "ab",
+          "name",
+          "site",
+          "st",
+          "sub",
+          "host",
+          "prov",
+          "ip",
+          "needsDiag",
+          "table",
+          "actions",
+          "tabs",
+          "rel"
+        ],
+        "title": "Object"
+      },
+      "ObjectAction": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "primary": {
+            "type": "boolean",
+            "title": "Primary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "key",
+          "primary"
+        ],
+        "title": "ObjectAction"
+      },
+      "Overview": {
+        "properties": {
+          "notices": {
+            "items": {
+              "$ref": "#/components/schemas/Notice"
+            },
+            "type": "array",
+            "title": "Notices"
+          },
+          "domains": {
+            "items": {
+              "$ref": "#/components/schemas/Domain"
+            },
+            "type": "array",
+            "title": "Domains"
+          }
+        },
+        "type": "object",
+        "required": [
+          "notices",
+          "domains"
+        ],
+        "title": "Overview"
+      },
+      "Power": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "onBattery": {
+            "type": "boolean",
+            "title": "Onbattery"
+          },
+          "banner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Banner"
+          },
+          "tiles": {
+            "items": {
+              "$ref": "#/components/schemas/Tile"
+            },
+            "type": "array",
+            "title": "Tiles"
+          },
+          "stack": {
+            "items": {
+              "$ref": "#/components/schemas/StackPart"
+            },
+            "type": "array",
+            "title": "Stack"
+          },
+          "branches": {
+            "items": {
+              "$ref": "#/components/schemas/PowerBranch"
+            },
+            "type": "array",
+            "title": "Branches"
+          },
+          "legend": {
+            "items": {
+              "$ref": "#/components/schemas/Legend"
+            },
+            "type": "array",
+            "title": "Legend"
+          },
+          "bars": {
+            "items": {
+              "$ref": "#/components/schemas/PowerBar"
+            },
+            "type": "array",
+            "title": "Bars"
+          },
+          "peak": {
+            "type": "string",
+            "title": "Peak"
+          },
+          "since": {
+            "type": "string",
+            "title": "Since"
+          },
+          "insights": {
+            "items": {
+              "$ref": "#/components/schemas/Insight"
+            },
+            "type": "array",
+            "title": "Insights"
+          },
+          "methods": {
+            "items": {
+              "$ref": "#/components/schemas/Method"
+            },
+            "type": "array",
+            "title": "Methods"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "onBattery",
+          "banner",
+          "tiles",
+          "stack",
+          "branches",
+          "legend",
+          "bars",
+          "peak",
+          "since",
+          "insights",
+          "methods"
+        ],
+        "title": "Power"
+      },
+      "PowerBar": {
+        "properties": {
+          "u": {
+            "type": "string",
+            "title": "U"
+          },
+          "w": {
+            "type": "string",
+            "title": "W"
+          },
+          "s": {
+            "type": "string",
+            "title": "S"
+          }
+        },
+        "type": "object",
+        "required": [
+          "u",
+          "w",
+          "s"
+        ],
+        "title": "PowerBar"
+      },
+      "PowerBranch": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "sub": {
+            "type": "string",
+            "title": "Sub"
+          },
+          "series": {
+            "type": "integer",
+            "title": "Series"
+          },
+          "total": {
+            "type": "string",
+            "title": "Total"
+          },
+          "alarm": {
+            "type": "boolean",
+            "title": "Alarm"
+          },
+          "obj": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Obj"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/PowerRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "t",
+          "sub",
+          "series",
+          "total",
+          "alarm",
+          "obj",
+          "rows"
+        ],
+        "title": "PowerBranch"
+      },
+      "PowerRow": {
+        "properties": {
+          "obj": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Obj"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "share": {
+            "type": "string",
+            "title": "Share"
+          },
+          "w": {
+            "type": "string",
+            "title": "W"
+          },
+          "off": {
+            "type": "boolean",
+            "title": "Off"
+          },
+          "src": {
+            "type": "string",
+            "title": "Src"
+          },
+          "srcLv": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warn",
+              "crit",
+              "info",
+              "mute",
+              "text"
+            ],
+            "title": "Srclv"
+          },
+          "loss": {
+            "type": "boolean",
+            "title": "Loss"
+          }
+        },
+        "type": "object",
+        "required": [
+          "obj",
+          "name",
+          "share",
+          "w",
+          "off",
+          "src",
+          "srcLv",
+          "loss"
+        ],
+        "title": "PowerRow"
+      },
+      "PriceIn": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "maxLength": 16,
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "value"
+        ],
+        "title": "PriceIn"
+      },
+      "Progress": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "pct": {
+            "type": "integer",
+            "title": "Pct"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "pct"
+        ],
+        "title": "Progress"
+      },
+      "RelGroup": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Entry"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "items"
+        ],
+        "title": "RelGroup"
+      },
+      "Scope": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "line": {
+            "type": "string",
+            "title": "Line"
+          },
+          "obj": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Obj"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "line",
+          "obj"
+        ],
+        "title": "Scope"
+      },
+      "Settings": {
+        "properties": {
+          "price": {
+            "type": "string",
+            "title": "Price"
+          }
+        },
+        "type": "object",
+        "required": [
+          "price"
+        ],
+        "title": "Settings"
+      },
+      "SiteRow": {
+        "properties": {
+          "gateway": {
+            "type": "string",
+            "title": "Gateway"
+          },
+          "internet": {
+            "type": "string",
+            "title": "Internet"
+          },
+          "internetLv": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "warn",
+                  "crit",
+                  "info",
+                  "mute",
+                  "text"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Internetlv"
+          },
+          "link": {
+            "type": "string",
+            "title": "Link"
+          }
+        },
+        "type": "object",
+        "required": [
+          "gateway",
+          "internet",
+          "internetLv",
+          "link"
+        ],
+        "title": "SiteRow"
+      },
+      "Snapshot": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "range": {
+            "type": "string",
+            "enum": [
+              "live",
+              "1 h",
+              "24 h",
+              "7 d"
+            ],
+            "title": "Range"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            },
+            "type": "array",
+            "title": "Scopes"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/Source"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/Object"
+            },
+            "type": "array",
+            "title": "Objects"
+          },
+          "alerts": {
+            "items": {
+              "$ref": "#/components/schemas/Alert"
+            },
+            "type": "array",
+            "title": "Alerts"
+          },
+          "cmdb": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Cmdb"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updates": {
+            "items": {
+              "$ref": "#/components/schemas/Update"
+            },
+            "type": "array",
+            "title": "Updates"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/Storage"
+          },
+          "backups": {
+            "$ref": "#/components/schemas/Backups"
+          },
+          "notifications": {
+            "items": {
+              "$ref": "#/components/schemas/Channel"
+            },
+            "type": "array",
+            "title": "Notifications"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/Change"
+            },
+            "type": "array",
+            "title": "Changes"
+          },
+          "overview": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Overview"
+            },
+            "type": "object",
+            "title": "Overview"
+          },
+          "topology": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Topology"
+            },
+            "type": "object",
+            "title": "Topology"
+          },
+          "power": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Power"
+            },
+            "type": "object",
+            "title": "Power"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "range",
+          "scopes",
+          "sources",
+          "objects",
+          "alerts",
+          "cmdb",
+          "updates",
+          "storage",
+          "backups",
+          "notifications",
+          "changes",
+          "overview",
+          "topology",
+          "power",
+          "settings"
+        ],
+        "title": "Snapshot",
+        "description": "Everything the UI shows, for one time range. Page models that depend on the site scope are keyed by scope id."
+      },
+      "Source": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "covers": {
+            "type": "string",
+            "title": "Covers"
+          },
+          "sync": {
+            "type": "string",
+            "title": "Sync"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "mock",
+              "live"
+            ],
+            "title": "Mode"
+          },
+          "health": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warn",
+              "disconnected"
+            ],
+            "title": "Health"
+          },
+          "paused": {
+            "type": "boolean",
+            "title": "Paused"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "covers",
+          "sync",
+          "mode",
+          "health",
+          "paused"
+        ],
+        "title": "Source"
+      },
+      "StackPart": {
+        "properties": {
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "w": {
+            "type": "string",
+            "title": "W"
+          },
+          "series": {
+            "type": "integer",
+            "title": "Series"
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "w",
+          "series"
+        ],
+        "title": "StackPart"
+      },
+      "Storage": {
+        "properties": {
+          "tiles": {
+            "items": {
+              "$ref": "#/components/schemas/Tile"
+            },
+            "type": "array",
+            "title": "Tiles"
+          },
+          "volumes": {
+            "items": {
+              "$ref": "#/components/schemas/Volume"
+            },
+            "type": "array",
+            "title": "Volumes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tiles",
+          "volumes"
+        ],
+        "title": "Storage"
+      },
+      "Tab": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "sections": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/KvSection"
+                },
+                {
+                  "$ref": "#/components/schemas/BarsSection"
+                },
+                {
+                  "$ref": "#/components/schemas/TempsSection"
+                },
+                {
+                  "$ref": "#/components/schemas/ListSection"
+                },
+                {
+                  "$ref": "#/components/schemas/NoteSection"
+                },
+                {
+                  "$ref": "#/components/schemas/FansSection"
+                },
+                {
+                  "$ref": "#/components/schemas/ChartSection"
+                },
+                {
+                  "$ref": "#/components/schemas/BoardSection"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                  "bars": "#/components/schemas/BarsSection",
+                  "board": "#/components/schemas/BoardSection",
+                  "chart": "#/components/schemas/ChartSection",
+                  "fans": "#/components/schemas/FansSection",
+                  "kv": "#/components/schemas/KvSection",
+                  "list": "#/components/schemas/ListSection",
+                  "note": "#/components/schemas/NoteSection",
+                  "temps": "#/components/schemas/TempsSection"
+                }
+              }
+            },
+            "type": "array",
+            "title": "Sections"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "sections"
+        ],
+        "title": "Tab"
+      },
+      "Temp": {
+        "properties": {
+          "l": {
+            "type": "string",
+            "title": "L"
+          },
+          "t": {
+            "type": "number",
+            "title": "T"
+          },
+          "warn": {
+            "type": "number",
+            "title": "Warn"
+          },
+          "crit": {
+            "type": "number",
+            "title": "Crit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "l",
+          "t",
+          "warn",
+          "crit"
+        ],
+        "title": "Temp"
+      },
+      "TempsSection": {
+        "properties": {
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "wide": {
+            "type": "boolean",
+            "title": "Wide"
+          },
+          "type": {
+            "type": "string",
+            "const": "temps",
+            "title": "Type"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Temp"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "wide",
+          "type",
+          "items"
+        ],
+        "title": "TempsSection"
+      },
+      "ThermalLayout": {
+        "properties": {
+          "chassis": {
+            "type": "string",
+            "title": "Chassis"
+          },
+          "default": {
+            "type": "string",
+            "title": "Default"
+          },
+          "comps": {
+            "items": {
+              "$ref": "#/components/schemas/ThermalPart"
+            },
+            "type": "array",
+            "title": "Comps"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chassis",
+          "default",
+          "comps"
+        ],
+        "title": "ThermalLayout"
+      },
+      "ThermalPart": {
+        "properties": {
+          "k": {
+            "type": "string",
+            "title": "K"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "temp",
+              "fan"
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "x": {
+            "type": "integer",
+            "title": "X"
+          },
+          "y": {
+            "type": "integer",
+            "title": "Y"
+          },
+          "sensor": {
+            "type": "string",
+            "title": "Sensor"
+          },
+          "w": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "W"
+          },
+          "h": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "H"
+          },
+          "t": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "T"
+          },
+          "warn": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warn"
+          },
+          "thr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thr"
+          },
+          "vert": {
+            "type": "boolean",
+            "title": "Vert",
+            "default": false
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "S"
+          },
+          "rpm": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rpm"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          }
+        },
+        "type": "object",
+        "required": [
+          "k",
+          "kind",
+          "label",
+          "x",
+          "y",
+          "sensor"
+        ],
+        "title": "ThermalPart"
+      },
+      "Tile": {
+        "properties": {
+          "l": {
+            "type": "string",
+            "title": "L"
+          },
+          "v": {
+            "type": "string",
+            "title": "V"
+          },
+          "lv": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warn",
+              "crit",
+              "info",
+              "mute",
+              "text"
+            ],
+            "title": "Lv"
+          },
+          "s": {
+            "type": "string",
+            "title": "S"
+          }
+        },
+        "type": "object",
+        "required": [
+          "l",
+          "v",
+          "lv",
+          "s"
+        ],
+        "title": "Tile"
+      },
+      "TopoBar": {
+        "properties": {
+          "l": {
+            "type": "string",
+            "title": "L"
+          },
+          "pct": {
+            "type": "number",
+            "title": "Pct"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "l",
+          "pct",
+          "text"
+        ],
+        "title": "TopoBar"
+      },
+      "TopoLine": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "solid",
+              "tunnel",
+              "sitemagic",
+              "flow",
+              "planned"
+            ],
+            "title": "Kind"
+          },
+          "x": {
+            "type": "integer",
+            "title": "X"
+          },
+          "y": {
+            "type": "integer",
+            "title": "Y"
+          },
+          "w": {
+            "type": "integer",
+            "title": "W"
+          },
+          "h": {
+            "type": "integer",
+            "title": "H"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "x",
+          "y",
+          "w",
+          "h"
+        ],
+        "title": "TopoLine"
+      },
+      "TopoNode": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "net",
+              "host",
+              "group"
+            ],
+            "title": "Kind"
+          },
+          "x": {
+            "type": "integer",
+            "title": "X"
+          },
+          "y": {
+            "type": "integer",
+            "title": "Y"
+          },
+          "w": {
+            "type": "integer",
+            "title": "W"
+          },
+          "h": {
+            "type": "integer",
+            "title": "H"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "sub": {
+            "type": "string",
+            "title": "Sub"
+          },
+          "bars": {
+            "items": {
+              "$ref": "#/components/schemas/TopoBar"
+            },
+            "type": "array",
+            "title": "Bars"
+          },
+          "vps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Vps"
+          },
+          "layer": {
+            "type": "string",
+            "enum": [
+              "compute",
+              "network",
+              "external"
+            ],
+            "title": "Layer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "x",
+          "y",
+          "w",
+          "h",
+          "name",
+          "sub",
+          "bars",
+          "vps",
+          "layer"
+        ],
+        "title": "TopoNode"
+      },
+      "TopoPill": {
+        "properties": {
+          "x": {
+            "type": "integer",
+            "title": "X"
+          },
+          "y": {
+            "type": "integer",
+            "title": "Y"
+          },
+          "t": {
+            "type": "string",
+            "title": "T"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "plain",
+              "tunnel",
+              "sitemagic",
+              "flow"
+            ],
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "t",
+          "kind"
+        ],
+        "title": "TopoPill"
+      },
+      "Topology": {
+        "properties": {
+          "h": {
+            "type": "integer",
+            "title": "H"
+          },
+          "sub": {
+            "type": "string",
+            "title": "Sub"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/TopoNode"
+            },
+            "type": "array",
+            "title": "Nodes"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/TopoLine"
+            },
+            "type": "array",
+            "title": "Lines"
+          },
+          "pills": {
+            "items": {
+              "$ref": "#/components/schemas/TopoPill"
+            },
+            "type": "array",
+            "title": "Pills"
+          }
+        },
+        "type": "object",
+        "required": [
+          "h",
+          "sub",
+          "nodes",
+          "lines",
+          "pills"
+        ],
+        "title": "Topology"
+      },
+      "Update": {
+        "properties": {
+          "obj": {
+            "type": "string",
+            "title": "Obj"
+          },
+          "what": {
+            "type": "string",
+            "title": "What"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "scheduled": {
+            "type": "boolean",
+            "title": "Scheduled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "obj",
+          "what",
+          "source",
+          "scheduled"
+        ],
+        "title": "Update"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "Volume": {
+        "properties": {
+          "obj": {
+            "type": "string",
+            "title": "Obj"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "site": {
+            "type": "string",
+            "title": "Site"
+          },
+          "host": {
+            "type": "string",
+            "title": "Host"
+          },
+          "used": {
+            "type": "string",
+            "title": "Used"
+          },
+          "usedLv": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "warn",
+                  "crit",
+                  "info",
+                  "mute",
+                  "text"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usedlv"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "statusLv": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warn",
+              "crit",
+              "info",
+              "mute",
+              "text"
+            ],
+            "title": "Statuslv"
+          }
+        },
+        "type": "object",
+        "required": [
+          "obj",
+          "name",
+          "site",
+          "host",
+          "used",
+          "usedLv",
+          "status",
+          "statusLv"
+        ],
+        "title": "Volume"
+      }
+    }
+  }
+}

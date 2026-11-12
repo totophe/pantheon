@@ -4,68 +4,120 @@ Home lab observatory: one place to see sites, hosts, guests, containers, network
 tunnels, power, backups and alerts, with a page for every object and the topology map as
 one way of looking at them.
 
-This repository currently holds the web UI, built from the "Pantheon — full working mockup"
-design. Every planned integration has a mock dataset, and a global **Mock data** switch
-chooses between those and live sources. No live client is written yet, so with the switch
-off the app is empty.
+```
+browser ──► web (Caddy: static UI, proxies /api) ──► server (FastAPI) ──► integrations
+```
+
+- **`server/`** — Python, FastAPI. Holds one module per integration, merges their datasets
+  into one inventory, and serves it. Every integration currently delivers a mock dataset;
+  none has a live client yet.
+- **`web/`** — React + TypeScript (Vite). Renders what the API returns. It knows nothing
+  about integrations or whether their data is mock or live.
 
 ## Run it
 
-```bash
-npm install
-```
+With Docker:
 
 ```bash
-npm run dev
+docker compose up --build
 ```
 
-`npm run build` type-checks and produces a static bundle in `dist/`.
+Then open http://localhost:8080 (set `PANTHEON_PORT` to change the port).
+
+For development, run the two halves side by side. The server:
+
+```bash
+cd server && uv run uvicorn pantheon.main:app --reload --port 8000
+```
+
+The frontend, which proxies `/api` to port 8000 (set `PANTHEON_API` to point elsewhere):
+
+```bash
+cd web && npm install && npm run dev
+```
+
+## Configuration
+
+Environment variables of the server:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PANTHEON_MOCK` | `all` | Which integrations serve mock data: `all`, `none`, or a comma-separated list of ids such as `proxmox,unifi`. The others are live. |
+| `PANTHEON_DATA_DIR` | unset | Directory for the SQLite file with Pantheon's own state. Unset keeps it in memory. The Docker image sets it to `/data`, a volume. |
+
+Integration ids: `proxmox`, `metrics` (VictoriaMetrics), `truenas`, `nut`, `unifi`,
+`sitemanager`, `docker`, `netbox`, `synology`, `homeassistant`, `ipmi`, `ovh`, `quicksrv`,
+`scaleway`, `cloudflare`, `tailscale`, `llm` (Ollama / vLLM), `pihole`, `uptimekuma`.
+
+A live integration with no client delivers nothing, so its part of the inventory is simply
+absent and Data sources shows it as "Not connected". With `PANTHEON_MOCK=none` the app is empty.
+
+## API
+
+| Endpoint | What it does |
+| --- | --- |
+| `GET /api/snapshot?range=24 h` | Everything the UI shows for one time range (`live`, `1 h`, `24 h`, `7 d`) |
+| `GET /api/events` | Server-sent events: one message per change; the UI then fetches a new snapshot |
+| `POST /api/actions/{key}` | Run an action the snapshot offers (live-migrate, run diagnostics, …) |
+| `POST /api/toggles/{group}/{key}` | Flip one of Pantheon's own flags: `acked`, `silenced`, `off`, `sched`, `notif` |
+| `PUT /api/settings/price` | Electricity tariff |
+| `GET /api/health` | Liveness |
+
+Interactive docs are at `/docs` on the server.
+
+**Actions are simulated.** They change an in-memory model of the demo lab (reset on restart)
+and never reach real infrastructure. Pantheon's own state (acknowledged alerts, paused
+sources, accepted drift, schedules, notification channels, tariff) is stored in SQLite.
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
-| `src/App.tsx` | Shell: top bar, sidebar, breadcrumbs, page switch, command palette |
-| `src/components/` | Shell pieces and shared UI primitives (`ui.tsx`) |
-| `src/pages/` | Overview, Topology, Power, the generic list page and the generic object page |
-| `src/model/store.ts` | UI state, mirrored to the URL hash (`#/hosts`, `#/o/olympus/Hardware`); holds the data mode |
-| `src/model/buildView.js` | Builds one inventory from the integrations' datasets, then the view model the pages render |
-| `src/model/types.ts` | Types for the UI state and the view model |
-| `src/integrations/` | One module per integration: its metadata, its mock dataset, and the slot for its live client |
-| `src/styles.css` | Design tokens and all styles |
+| `server/src/pantheon/integrations/` | One module per integration: metadata, mock dataset, slot for the live client |
+| `server/src/pantheon/inventory.py` | Merges the datasets into objects with tabs and sections |
+| `server/src/pantheon/views.py` | Power breakdown and overview, computed from the inventory |
+| `server/src/pantheon/lab.py` | What is specific to this lab: the hand-placed topology and scope captions |
+| `server/src/pantheon/snapshot.py` | Assembles the API response |
+| `server/src/pantheon/state.py` | Simulated lab, SQLite-backed settings, change notifications |
+| `server/src/pantheon/schema.py` | The API contract (Pydantic models) |
+| `server/src/pantheon/main.py` | The FastAPI app |
+| `web/src/api/` | API client and the types generated from the server's schema |
+| `web/src/model/store.ts` | UI state (mirrored to the URL hash) plus the latest snapshot |
+| `web/src/model/buildView.js` | Turns snapshot + UI state into what the pages render: colours, sizes, tables |
+| `web/src/pages/`, `web/src/components/` | Overview, Topology, Power, the generic list page and object page, and the shell |
 
-Every list page (Hosts, Storage, Alerts, Drift…) is the same `ListPage` fed different tables,
-and every object (site, host, VM, container, VLAN, VPS, UPS, service…) is the same `ObjectPage`
-fed different tabs and cards. Adding a new kind of object is a data change, not a new screen.
+## Checks
+
+```bash
+cd server && uv run pytest && uv run ruff check .
+```
+
+```bash
+cd web && npm run build
+```
+
+## Changing the API
+
+The frontend's types are generated from the server's models. After changing
+`server/src/pantheon/schema.py`:
+
+```bash
+cd server && uv run python -m pantheon.openapi > openapi.json
+```
+
+```bash
+cd web && npm run api:types
+```
+
+A server test fails if `openapi.json` is out of date.
+
+## Adding a live integration
+
+Give the integration a `fetch` coroutine in `server/src/pantheon/integrations/` that returns
+the same shape as its `mock`, and leave its id out of `PANTHEON_MOCK`. The server polls it
+on the integration's interval and merges the result; the frontend needs no change.
 
 ## Keyboard
 
 - `⌘K` / `Ctrl K` opens search; `Enter` opens the first result
 - `Esc` closes search and the alerts popover
-
-## Data: mock or live
-
-The **Mock data** switch in the top bar (also on Settings → Data sources) is global and is
-remembered in the browser. `VITE_DATA_MODE=live` makes live the default for a build.
-
-- **On:** every integration in `src/integrations/` reports its mock dataset, together
-  describing one demo home lab. The simulated actions ("Live-migrate", "Run diagnostics",
-  "Simulate power cut"…) change those datasets, so the whole UI reacts.
-- **Off:** only data fetched by an integration's live client is used. None has one yet, so
-  pages show "No data yet".
-
-Integrations with mock data: Proxmox VE, VictoriaMetrics, TrueNAS, NUT, UniFi Network,
-UniFi Site Manager, Docker agents, NetBox, Synology DSM, Home Assistant, IPMI / Redfish, OVH,
-Quicksrv.io, Scaleway, Cloudflare, Tailscale, Ollama / vLLM, Pi-hole and Uptime Kuma.
-
-Each integration owns some objects (Proxmox owns nodes and guests, TrueNAS the pools, UniFi
-the switches and VLANs…) and may add to objects owned by another (VictoriaMetrics adds
-sensors to hosts, NetBox the CMDB record, NUT the power path). All of them can contribute to
-shared feeds: alerts, updates, recent changes, power readings, backup jobs. A source that
-delivers nothing simply leaves its part out.
-
-## Next step
-
-Give an integration a live client: add `fetch()` to its entry in `src/integrations/`,
-returning the same shape as its `mock()`. The store already calls it in live mode and merges
-the result.
