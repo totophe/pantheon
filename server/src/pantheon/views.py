@@ -44,7 +44,89 @@ METHODS = [
 GPU_CAP_SAVING_KWH = 86
 
 
+def live_power(inv: Inventory, scope: str, price_raw: str) -> dict:
+    """The power breakdown from whatever the sources measure: one branch per UPS, one for everything else."""
+    O = inv.objects
+    price = parse_price(price_raw)
+    branches_def = [{"key": u["id"], "t": f"{u['name']} · on UPS", "sub": "protected", "obj": u["id"], "site": u["site"], "ups": u} for u in inv.ups if u["id"] in O]
+    branches_def.append({"key": "wall", "t": "Not on a UPS", "sub": "not protected", "obj": None, "site": None, "ups": None})
+    readings = [{**r, "b": inv.ups_of.get(r.get("id"), "wall")} for r in inv.feed("power") if not r.get("id") or r["id"] in O]
+    in_scope = [r for r in readings if scope == "all" or (O[r["id"]]["site"] if r.get("id") else "home") == scope]
+    total = sum(r["w"] for r in in_scope)
+    max_w = max([r["w"] for r in in_scope] + [1])
+
+    def name_of(r):
+        return O[r["id"]]["name"] if r.get("id") else r["name"]
+
+    branches, stack = [], []
+    for i, br in enumerate(branches_def):
+        rs = sorted((r for r in in_scope if r["b"] == br["key"]), key=lambda r: -r["w"])
+        if not rs:
+            continue
+        u = br["ups"]
+        branches.append({"key": br["key"], "t": br["t"], "sub": br["sub"] + (" · " + ("ON BATTERY" if u["on_battery"] else "on mains") if u else ""), "series": i % 3,
+                         "total": f"{sum(r['w'] for r in rs)} W", "alarm": bool(u and u["on_battery"]), "obj": br["obj"],
+                         "rows": [{"obj": r.get("id"), "name": name_of(r), "share": f"{_round(r['w'] / max_w * 100)}%", "w": f"{r['w']} W", "off": False,
+                                   "src": SOURCES[r["src"]][0], "srcLv": SOURCES[r["src"]][1], "loss": False} for r in rs]})
+        stack += [{"t": f"{name_of(r)} · {r['w']} W", "w": _fixed(r["w"] / total * 100) + "%", "series": i % 3} for r in rs if r["w"] > 0]
+
+    guessed = [r for r in in_scope if r["src"] in ("est", "poe")]
+    coverage = _round((total - sum(r["w"] for r in guessed)) / total * 100) if total else 100
+    month_kwh = _round(total * 0.72)
+    tiles = [{"l": "Drawing now", "v": f"{total} W", "lv": "text", "s": f"{len(in_scope)} readings"},
+             {"l": "Month at this rate", "v": f"€ {_round(month_kwh * price)}", "lv": "text", "s": f"{month_kwh} kWh × € {_fixed(price, 2)}"}]
+    for u in inv.ups:
+        if scope in ("all", u["site"]):
+            tiles.append({"l": u["name"], "v": f"ON BATTERY · {u['batt']}%" if u["on_battery"] else f"{u['batt']}% · {u['runtime']} min", "lv": "crit" if u["on_battery"] else "ok", "s": f"{u['load_w']} W load"})
+    if in_scope:
+        tiles.append({"l": "Measured, not estimated", "v": f"{coverage}%", "lv": "warn" if coverage < 90 else "ok", "s": f"{len(guessed)} devices estimated"})
+    on_battery = [u for u in inv.ups if u["on_battery"] and scope in ("all", u["site"])]
+    used = {SOURCES[r["src"]][0] for r in in_scope}
+    return {
+        "total": total, "onBattery": bool(on_battery),
+        "banner": " ".join(f"{u['name']} carries {u['load_w']} W · {u['runtime']} min left." for u in on_battery) or None,
+        "tiles": tiles, "stack": stack, "branches": branches, "legend": [], "bars": [], "peak": "", "since": "",
+        "insights": [],
+        "methods": [{"t": t, "d": d.split(":")[0], "acc": acc, "lv": lv} for t, d, acc, lv in METHODS if t in used],
+    }
+
+
+def live_overview(inv: Inventory, scope: str, open_drift: int, power_total: int) -> dict:
+    """Health by domain, counted from the inventory. Domains with nothing in them are left out."""
+    O, nb = inv.objects, inv.data.get("netbox")
+
+    def of(*types):
+        return inv.of_types(*types, scope=scope)
+
+    def dom(t, ids, v1, l1, v2, l2, route):
+        w = inv.worst(ids, scope)
+        n = sum(1 for k in ids if O[k]["st"] == w)
+        return {"t": t, "lv": w, "s": "OK" if w == "ok" else f"{n} {'down' if w == 'crit' else 'warn'}", "v1": str(v1), "l1": l1, "v2": str(v2), "l2": l2, "note": "", "route": route}
+
+    sites, hosts, devices, ctrs, vlans, ups, pools, vps, provs = (of(t) for t in ("Site", "Host", "Network device", "Container", "VLAN", "UPS", "Pool", "VPS", "Provider"))
+    guests = of("VM", "LXC")
+    candidates = [
+        (sites, dom("Sites & WAN", sites, len(sites), "sites", len(devices), "network devices", "sites")),
+        (hosts, dom("Hosts", hosts, len(hosts), "physical", len(guests), "guests", "hosts")),
+        (ups or power_total, dom("Power", ups, power_total, "W now", len(ups), "UPS", "power")),
+        (guests + ctrs, dom("Workloads", guests + ctrs, len(guests), "VMs & LXCs", len(ctrs), "containers", "guests")),
+        (pools, dom("Storage", pools, len(pools), "pools", sum(1 for k in pools if O[k]["st"] != "ok"), "need attention", "storage")),
+        (vlans + devices, dom("Network", vlans + devices, len(vlans), "VLANs", len(devices), "devices", "network")),
+        (vps + provs, dom("Edge & cloud", vps + provs, len(vps), "VPS", len(provs), "providers", "edge")),
+    ]
+    domains = [d for present, d in candidates if present]
+    notices = []
+    if nb:
+        domains.append({"t": "Drift & CMDB", "lv": "info" if open_drift else "ok", "s": f"{open_drift} diffs" if open_drift else "in sync", "v1": nb["object_count"], "l1": "objects in NetBox",
+                        "v2": str(open_drift), "l2": "differ", "note": "", "route": "drift"})
+        if open_drift:
+            notices.append({"lv": "info", "title": f"{open_drift} differences with NetBox", "domain": "Drift & CMDB", "where": " · ".join(dict.fromkeys(O[d[0]]["name"] if d[0] in O else d[0] for d in inv.drift)),
+                            "when": "now", "action": "Review", "route": "drift", "obj": None})
+    return {"notices": notices, "domains": domains}
+
+
 def power(inv: Inventory, world: Any, scope: str, range_: str, price_raw: str) -> dict:
+    """The demo lab's power page: fixed circuits, a synthetic history and written-out insights."""
     O = inv.objects
     price = parse_price(price_raw)
     speed = RANGE_SPEED[range_]
@@ -152,7 +234,7 @@ def power(inv: Inventory, world: Any, scope: str, range_: str, price_raw: str) -
 
 
 def overview(inv: Inventory, world: Any, scope: str, open_drift: int, power_total: int) -> dict:
-    """Health by domain, plus the notices that are not alerts."""
+    """The demo lab's overview: health by domain with hand-written notes, plus the notices that are not alerts."""
     O, D = inv.objects, inv.data
     nb = D.get("netbox") or {}
     if not O:

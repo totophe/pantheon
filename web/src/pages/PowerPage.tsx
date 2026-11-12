@@ -22,6 +22,7 @@ export function PowerPage({ vm }: { vm: ViewModel }) {
 
       <section aria-label="Where the watts go" className="section">
         <h2>Where the watts go</h2>
+        {pw.branches.length === 0 && <p className="meta">No source reports power draw yet.</p>}
         <div className="watt-stack">
           {pw.stack.map((s) => <span key={s.t} title={s.t} style={{ width: s.w, background: s.c }} />)}
         </div>
@@ -52,26 +53,28 @@ export function PowerPage({ vm }: { vm: ViewModel }) {
         </div>
       </section>
 
-      <section aria-label="Consumption over time" className="card">
-        <div className="chart-head">
-          <h2>Consumption · {vm.rangeLabel}</h2>
-          <span className="chart-legend">
-            {pw.legend.map((l) => (
-              <span key={l.label}><span className="swatch-sm" style={{ background: l.c }} />{l.label}</span>
-            ))}
-          </span>
-        </div>
-        <div role="img" aria-label="Power draw per period, stacked by branch" className="power-bars">
-          {pw.bars.map((b, i) => (
-            <span key={i}>
-              <span className="bar-ups" style={{ height: b.u }} />
-              <span className="bar-wall" style={{ height: b.w }} />
-              <span className="bar-siteb" style={{ height: b.s }} />
+      {pw.bars.length > 0 && (
+        <section aria-label="Consumption over time" className="card">
+          <div className="chart-head">
+            <h2>Consumption · {vm.rangeLabel}</h2>
+            <span className="chart-legend">
+              {pw.legend.map((l) => (
+                <span key={l.label}><span className="swatch-sm" style={{ background: l.c }} />{l.label}</span>
+              ))}
             </span>
-          ))}
-        </div>
-        <div className="chart-axis"><span>{pw.from}</span><span>peak {pw.peak}</span><span>now</span></div>
-      </section>
+          </div>
+          <div role="img" aria-label="Power draw per period, stacked by branch" className="power-bars">
+            {pw.bars.map((b, i) => (
+              <span key={i}>
+                <span className="bar-ups" style={{ height: b.u }} />
+                <span className="bar-wall" style={{ height: b.w }} />
+                <span className="bar-siteb" style={{ height: b.s }} />
+              </span>
+            ))}
+          </div>
+          <div className="chart-axis"><span>{pw.from}</span><span>peak {pw.peak}</span><span>now</span></div>
+        </section>
+      )}
 
       <div className="insight-grid">
         {pw.insights.map((i) => (
@@ -85,19 +88,21 @@ export function PowerPage({ vm }: { vm: ViewModel }) {
         ))}
       </div>
 
-      <section aria-label="How we measure" className="card card-flush">
-        <div className="card-head">
-          <h2>How we measure</h2>
-          <button type="button" className="text-btn" onClick={vm.goSources}>Data sources →</button>
-        </div>
-        {pw.methods.map((m) => (
-          <div key={m.t} className="method-row">
-            <span><span className="chip" style={{ background: m.bg, color: m.c }}>{m.t}</span></span>
-            <span className="text-2">{m.d}</span>
-            <span className="meta right">{m.acc}</span>
+      {pw.methods.length > 0 && (
+        <section aria-label="How we measure" className="card card-flush">
+          <div className="card-head">
+            <h2>How we measure</h2>
+            <button type="button" className="text-btn" onClick={vm.goSources}>Data sources →</button>
           </div>
-        ))}
-      </section>
+          {pw.methods.map((m) => (
+            <div key={m.t} className="method-row">
+              <span><span className="chip" style={{ background: m.bg, color: m.c }}>{m.t}</span></span>
+              <span className="text-2">{m.d}</span>
+              <span className="meta right">{m.acc}</span>
+            </div>
+          ))}
+        </section>
+      )}
     </div>
   );
 }

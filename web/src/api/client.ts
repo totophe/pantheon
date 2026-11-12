@@ -20,6 +20,8 @@ export const api = {
   act: (key: string) => send('POST', `/api/actions/${encodeURIComponent(key)}`),
   /** Flip one of Pantheon's own flags: acked, silenced, off, sched, notif. */
   toggle: (group: string, key: string) => send('POST', `/api/toggles/${encodeURIComponent(group)}/${encodeURIComponent(key)}`),
+  /** Poll one live source now. */
+  sync: (source: string) => send('POST', `/api/sources/${encodeURIComponent(source)}/sync`),
   setPrice: (value: string) => send('PUT', '/api/settings/price', { value }),
   /** Calls `onChange` whenever the server reports that something changed. */
   subscribe(onChange: () => void): () => void {

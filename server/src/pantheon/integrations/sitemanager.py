@@ -1,3 +1,4 @@
+from ..http import client, get, need, slug
 from .base import Integration, item, note, ref
 
 
@@ -32,4 +33,37 @@ def mock(sim):
     }
 
 
-sitemanager = Integration("sitemanager", "UniFi Site Manager", "2 sites · Site Magic · WAN failover", "20 s", mock)
+# ---------- live ----------
+
+
+async def fetch(cfg: dict) -> dict:
+    """UniFi Site Manager (api.ui.com) with an API key from unifi.ui.com.
+
+    [sitemanager]  api_key, url = "https://api.ui.com", [sitemanager.sites] "<site name>" = "<site id>"
+
+    Site ids are what the other integrations put in their ``site`` setting ("home", "b"…).
+    """
+    need(cfg, "api_key")
+    ids = cfg.get("sites", {})
+    async with client(cfg, cfg.get("url", "https://api.ui.com"), headers={"X-API-Key": cfg["api_key"], "Accept": "application/json"}) as c:
+        raw = (await get(c, "/v1/sites")).get("data", [])
+    sites = []
+    for s in raw:
+        meta, stats = s.get("meta") or {}, s.get("statistics") or {}
+        counts, isp = stats.get("counts") or {}, (stats.get("ispInfo") or {}).get("name")
+        name = meta.get("desc") or meta.get("name") or s.get("siteId", "site")
+        sid = ids.get(name) or ids.get(meta.get("name", "")) or slug(name)
+        offline, uptime_pct = counts.get("offlineDevice", 0), (stats.get("percentages") or {}).get("wanUptime")
+        sites.append({
+            "id": sid if sid != "all" else "site-all", "ab": name[:4].upper(), "name": name, "site": sid, "status": "warn" if offline else "ok",
+            "sub": " · ".join(x for x in (isp, meta.get("timezone")) if x) or "UniFi site",
+            "health": [("WAN uptime", round(uptime_pct), f"{uptime_pct}%", "ok" if uptime_pct >= 99 else "warn")] if uptime_pct is not None else [],
+            "facts": [("Devices", str(counts["totalDevice"]) if "totalDevice" in counts else None), ("Offline devices", str(offline), "warn" if offline else None),
+                      ("Clients", str(counts.get("wifiClient", 0) + counts.get("wiredClient", 0)) if counts else None), ("ISP", isp)],
+            "uplinks": [item(isp, "", f"{uptime_pct}% uptime" if uptime_pct is not None else "", "ok")] if isp else [],
+            "table": {"gateway": meta.get("gatewayMac", ""), "internet": isp or "", "internet_lv": None, "link": "—"},
+        })
+    return {"sites": sites}
+
+
+sitemanager = Integration("sitemanager", "UniFi Site Manager", "2 sites · Site Magic · WAN failover", "20 s", mock, fetch=fetch)

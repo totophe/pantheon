@@ -109,6 +109,8 @@ class Store {
   // Changes go to the server; the event stream then brings the new snapshot.
   act = (key: string) => this.request(api.act(key));
   toggle = (group: string, key: string) => this.request(api.toggle(group, key));
+  /** Poll one live source now; how it went shows on the Data sources page. */
+  sync = (source: string) => this.request(api.sync(source));
   setPrice = (value: string) => {
     clearTimeout(this.priceTimer);
     this.priceTimer = setTimeout(() => this.request(api.setPrice(value)), 250);

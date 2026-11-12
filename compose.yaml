@@ -6,8 +6,12 @@ services:
     environment:
       # Which integrations serve mock data: "all", "none", or a comma-separated list of ids.
       PANTHEON_MOCK: ${PANTHEON_MOCK:-all}
+    # Secrets referenced as ${NAME} in pantheon.toml are read from the server's environment:
+    # env_file: .env
     volumes:
       - pantheon-data:/data
+      # Connection settings of the live integrations (see server/pantheon.example.toml):
+      # - ./pantheon.toml:/data/pantheon.toml:ro
 
   web:
     build: ./web

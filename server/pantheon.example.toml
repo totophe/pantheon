@@ -1,0 +1,123 @@
+# Connection settings of the live integrations.
+#
+# Copy to pantheon.toml (next to where the server starts, in its data directory, or wherever
+# PANTHEON_CONFIG points). An integration with a section here is live; the others keep
+# serving mock data unless PANTHEON_MOCK says otherwise. Delete what you do not use.
+#
+# ${NAME} is replaced by that environment variable, so secrets can stay out of this file.
+# Every section also accepts:  enabled = false · interval = <seconds, 10 or more> · timeout = <seconds>
+#
+# Object ids are lower-case names ("Olympus" → "olympus"). Sources that describe the same
+# machine must name it the same way, or be told its id where a setting asks for one.
+#
+# Try one source without starting the server:  uv run python -m pantheon.probe proxmox
+
+[proxmox]
+url = "https://olympus.home.lan:8006"
+token_id = "pantheon@pve!readonly"      # an API token; the PVEAuditor role is enough
+token_secret = "${PROXMOX_TOKEN}"
+site = "home"
+verify_tls = false                      # self-signed certificate
+
+[metrics]                               # VictoriaMetrics or anything Prometheus-compatible
+url = "http://monitoring.home.lan:8428"
+# username = "…"   password = "…"       # or: token = "…"
+host_label = "instance"                 # "olympus:9100" → olympus
+# [metrics.hosts]
+# "10.30.0.11:9100" = "olympus"         # when the label is not the host name
+
+[truenas]
+url = "https://alexandria.home.lan"
+api_key = "${TRUENAS_API_KEY}"
+site = "home"
+# id = "alexandria"                     # default: the hostname TrueNAS reports
+
+[nut]
+host = "alexandria.home.lan"
+port = 3493
+site = "home"
+# [nut.ups.rack]                        # per UPS, by its NUT name
+# site = "home"
+# [nut.ups.rack.powers]                 # what it feeds, and the note shown on each device
+# olympus = "group 2 · off at 5 min left"
+# udm-pro-max = "group 1"
+
+[unifi]
+url = "https://udm.home.lan"
+api_key = "${UNIFI_API_KEY}"            # created in the console: Settings → Control Plane → Integrations
+unifi_site = "default"
+site = "home"
+verify_tls = false
+
+[sitemanager]
+api_key = "${UNIFI_SITE_MANAGER_KEY}"   # from unifi.ui.com
+[sitemanager.sites]                     # UniFi site name → the site id used by the other sections
+"Home lab" = "home"
+"Site B" = "b"
+
+[docker.hosts]                          # a read-only Docker socket proxy per host; the key is the guest's object id
+hermes = "http://10.30.0.102:2375"
+apollo = "http://10.30.0.101:2375"
+
+[netbox]
+url = "https://netbox.home.lan"
+token = "${NETBOX_TOKEN}"
+owner = "Totophe"
+[netbox.sites]                          # NetBox site slug → site id
+home-lab = "home"
+
+[synology]
+url = "https://10.200.0.10:5001"
+username = "pantheon"
+password = "${SYNOLOGY_PASSWORD}"
+site = "b"
+id = "synology"
+verify_tls = false
+
+[homeassistant]
+url = "http://ha.home.lan:8123"
+token = "${HA_TOKEN}"                   # a long-lived access token
+[homeassistant.power]                   # object id → power sensor (W or kW)
+olympus = "sensor.olympus_plug_power"
+delphi = "sensor.delphi_plug_power"
+
+[ipmi.hosts.alexandria]                 # Redfish only. IPMI-only boards: use ipmi_exporter and [metrics]
+url = "https://alexandria-ipmi.home.lan"
+username = "pantheon"
+password = "${BMC_PASSWORD}"
+
+[ovh]
+app_key = "${OVH_APP_KEY}"
+app_secret = "${OVH_APP_SECRET}"
+consumer_key = "${OVH_CONSUMER_KEY}"    # needs GET on /vps and /vps/*
+# url = "https://eu.api.ovh.com/1.0"
+
+[scaleway]
+secret_key = "${SCW_SECRET_KEY}"
+zones = ["fr-par-1"]
+
+[cloudflare]
+api_token = "${CLOUDFLARE_TOKEN}"       # Zone:Read, and Cloudflare Tunnel:Read for tunnels
+account_id = "…"                        # optional; without it tunnels are not listed
+
+[tailscale]
+api_key = "${TAILSCALE_API_KEY}"
+# tailnet = "-"
+
+[llm.engines.kronos-a]
+host = "kronos"                         # object id of the machine it runs on
+kind = "ollama"
+url = "http://kronos.home.lan:11434"
+[llm.engines.delphi]
+host = "delphi"
+kind = "vllm"
+url = "http://delphi.home.lan:8000"
+
+[pihole]                                # Pi-hole 6
+url = "http://pihole.home.lan"
+password = "${PIHOLE_PASSWORD}"
+guest = "pihole"                        # object id of the guest that runs it
+
+[uptimekuma]
+url = "https://status.home.lan"
+api_key = "${UPTIME_KUMA_KEY}"          # Settings → API Keys

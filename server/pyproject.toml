@@ -5,6 +5,7 @@ description = "Pantheon server: polls the lab, merges it into one inventory, ser
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.162.5",
+    "httpx>=0.28.1",
     "uvicorn[standard]>=0.54.0",
 ]
 

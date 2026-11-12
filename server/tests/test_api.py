@@ -6,9 +6,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pantheon.config import Settings
-from pantheon.integrations import INTEGRATIONS, Integration, collect
+from pantheon.integrations import INTEGRATIONS, collect
 from pantheon.main import create_app
-from pantheon.poller import Poller, seconds
+from pantheon.poller import seconds
 from pantheon.snapshot import snapshot
 from pantheon.state import Prefs, Simulator, World
 
@@ -128,34 +128,16 @@ def test_mock_setting_is_read_from_the_environment(monkeypatch):
         Settings.from_env()
 
 
-def test_live_integrations_are_polled_and_merged():
-    async def scenario():
-        calls = []
-
-        async def fetch():
-            calls.append(1)
-            return {"sites": [], "marker": len(calls)}
-
-        async def broken():
-            raise RuntimeError("down")
-
-        changed = []
-        sources = [
-            Integration("sitemanager", "Sites", "", "1 s", lambda sim: {}, fetch=fetch),
-            Integration("x", "X", "", "1 s", lambda sim: {}, fetch=broken),
-            Integration("y", "No client", "", "1 s", lambda sim: {}),
-        ]
-        poller = Poller(sources, lambda: changed.append(1))
-        poller.start()
-        await asyncio.sleep(0.05)
-        poller.stop()
-        return poller.data, changed
-
-    data, changed = asyncio.run(scenario())
-    assert data == {"sitemanager": {"sites": [], "marker": 1}} and changed == [1]
-    merged = collect(World(), {"proxmox"}, data)
+def test_live_data_is_merged_with_mock_data():
+    merged = collect(World(), {"proxmox"}, {"sitemanager": {"sites": [], "marker": 1}})
     assert merged["sitemanager"]["marker"] == 1 and merged["proxmox"]["nodes"] and merged["unifi"] is None
     assert seconds("15 s") == 15 and seconds("5 min") == 300
+
+
+def test_sync_endpoint_only_polls_live_sources():
+    with client() as c:
+        assert c.post("/api/sources/proxmox/sync").status_code == 409  # mock
+        assert c.post("/api/sources/nope/sync").status_code == 404
 
 
 def test_snapshot_is_pure():

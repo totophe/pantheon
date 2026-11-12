@@ -24,7 +24,7 @@ function DataTable({ tb }: { tb: Table }) {
                 {r.hasGo ? <LinkButton onClick={r.go} className="ellipsis medium">{r.name}</LinkButton> : <span className="medium">{r.name}</span>}
               </span>
               {r.cells.map((x, j) => (
-                <span key={j} role="cell" className="ellipsis" style={{ color: x.c, fontFamily: x.ff, fontSize: x.fs }}>{x.t}</span>
+                <span key={j} role="cell" className="ellipsis" title={x.t} style={{ color: x.c, fontFamily: x.ff, fontSize: x.fs }}>{x.t}</span>
               ))}
               {tb.hasActions && (
                 <span role="cell" className="row-actions">

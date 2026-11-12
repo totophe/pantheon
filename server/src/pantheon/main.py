@@ -27,7 +27,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     world = World()
     prefs = Prefs(settings.data_dir / "pantheon.sqlite3" if settings.data_dir else None)
     simulator = Simulator(world, hub.publish)
-    poller = Poller([i for i in INTEGRATIONS if i.id not in settings.mock_ids], hub.publish)
+    poller = Poller([i for i in INTEGRATIONS if i.id not in settings.mock_ids], settings.sources, hub.publish, paused=lambda id: bool(prefs.group("off").get(id)))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -46,7 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def get_snapshot(range: Range = "24 h"):
         """Everything the UI shows. Fetch it again whenever /api/events reports a change."""
         data = collect(world, set(settings.mock_ids), poller.data)
-        return snapshot(data, set(settings.mock_ids), world, prefs, range, hub.version)
+        return snapshot(data, set(settings.mock_ids), world, prefs, range, hub.version, poller)
 
     @app.get("/api/events")
     async def events(request: Request) -> StreamingResponse:
@@ -75,6 +75,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(409, "Actions only exist for mock integrations so far.")
         elif not simulator.run(key):
             raise HTTPException(404, f"Unknown action: {key}")
+        return Response(status_code=204)
+
+    @app.post("/api/sources/{id}/sync", status_code=204)
+    async def sync_source(id: str) -> Response:
+        """Poll one live source now. How it went shows up in the snapshot's sources."""
+        if id not in {i.id for i in INTEGRATIONS}:
+            raise HTTPException(404, f"Unknown source: {id}")
+        if not poller.can_poll(id):
+            raise HTTPException(409, "This source is mock, not configured, or has no live client.")
+        await poller.refresh(id)
         return Response(status_code=204)
 
     @app.post("/api/toggles/{group}/{key}", status_code=204)

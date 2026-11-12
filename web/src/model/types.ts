@@ -34,6 +34,7 @@ export interface StoreLike {
   act(key: string): void;
   toggle(group: string, key: string): void;
   setPrice(value: string): void;
+  sync(source: string): void;
 }
 
 export interface Seg {

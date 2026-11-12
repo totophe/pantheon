@@ -186,9 +186,13 @@ class Source(BaseModel):
     covers: str
     sync: str
     mode: Literal["mock", "live"]
-    #: "disconnected" = live mode, and nothing has been received from it.
-    health: Literal["ok", "warn", "disconnected"]
+    #: "disconnected" = live, and nothing has been received yet; "error" = the last poll failed.
+    health: Literal["ok", "warn", "disconnected", "error"]
     paused: bool
+    #: How the last poll went, or why there is none. None for mock sources.
+    detail: str | None
+    #: Whether POST /api/sources/{id}/sync can poll it now.
+    canSync: bool
 
 
 class Alert(BaseModel):

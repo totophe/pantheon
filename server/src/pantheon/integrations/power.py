@@ -1,5 +1,8 @@
 """Power: smart plugs (Home Assistant), server BMCs (IPMI / Redfish) and UPS units (NUT)."""
 
+import asyncio
+
+from ..http import ConfigError, client, describe, get, need, slug
 from .base import Integration, item, ref
 
 
@@ -71,6 +74,140 @@ def _nut(sim):
     }
 
 
-homeassistant = Integration("homeassistant", "Home Assistant", "smart plugs · power · rack temperature", "10 s", _homeassistant)
-ipmi = Integration("ipmi", "IPMI / Redfish", "alexandria BMC · fans · PSU · rails", "30 s", _ipmi)
-nut = Integration("nut", "NUT · UPS", "2 UPS · load · battery · runtime", "5 s", _nut)
+# ---------- live ----------
+
+
+async def _fetch_homeassistant(cfg: dict) -> dict:
+    """Home Assistant over its REST API with a long-lived access token.
+
+    [homeassistant]  url, token, [homeassistant.power] "<object id>" = "sensor.some_plug_power"
+    """
+    need(cfg, "url", "token")
+    sensors = cfg.get("power") or {}
+    if not sensors:
+        raise ConfigError("missing setting: [homeassistant.power]")
+    async with client(cfg, cfg["url"].rstrip("/") + "/api", headers={"Authorization": f"Bearer {cfg['token']}"}) as c:
+        states = {s["entity_id"]: s for s in await get(c, "/states")}
+    power, psu, missing = [], {}, []
+    for obj, entity in sensors.items():
+        state = states.get(entity)
+        try:
+            watts = float(state["state"]) * (1000 if state["attributes"].get("unit_of_measurement") == "kW" else 1)
+        except (TypeError, KeyError, ValueError):
+            missing.append(f"{entity} has no reading")
+            continue
+        power.append({"id": obj, "w": round(watts), "src": "plug"})
+        psu[obj] = [("At the wall", f"{round(watts)} W · Home Assistant"), ("Sensor", entity)]
+    return {"power": power, "psu": psu, **({"warnings": missing} if missing else {})}
+
+
+async def _fetch_redfish(cfg: dict) -> dict:
+    """Server BMCs that speak Redfish: power draw, PSUs, temperatures and fans.
+
+    [ipmi.hosts.<object id>]  url, username, password, verify_tls = false
+
+    Boards with IPMI only (no Redfish) cannot be read this way; export them with ipmi_exporter and use [metrics].
+    """
+    hosts = cfg.get("hosts") or {}
+    if not hosts:
+        raise ConfigError("missing setting: [ipmi.hosts.<object id>]")
+
+    async def one(obj: str, h: dict) -> dict:
+        need(h, "url", "username", "password")
+        async with client({"verify_tls": False, **h}, h["url"].rstrip("/"), auth=(h["username"], h["password"])) as c:
+            chassis = (await get(c, "/redfish/v1/Chassis"))["Members"][0]["@odata.id"].rstrip("/")
+            pw = await get(c, f"{chassis}/Power")
+            try:
+                th = await get(c, f"{chassis}/Thermal")
+            except Exception:
+                th = {}
+        watts = next((p.get("PowerConsumedWatts") for p in pw.get("PowerControl", []) if p.get("PowerConsumedWatts") is not None), None)
+        supplies = [("PSU " + str(p.get("Name", i + 1)), " · ".join(x for x in (f"{p['PowerCapacityWatts']} W" if p.get("PowerCapacityWatts") else None, (p.get("Status") or {}).get("Health")) if x) or None)
+                    for i, p in enumerate(pw.get("PowerSupplies", []))]
+        rails = [(v.get("Name", "Rail"), f"{v['ReadingVolts']} V") for v in pw.get("Voltages", []) if v.get("ReadingVolts") is not None][:6]
+        temps = [(t.get("Name", "Sensor"), round(t["ReadingCelsius"]), round(t.get("UpperThresholdNonCritical") or (t.get("UpperThresholdCritical") or 95) - 10), round(t.get("UpperThresholdCritical") or 95))
+                 for t in th.get("Temperatures", []) if t.get("ReadingCelsius") is not None]
+        fans = [(f.get("Name") or f.get("FanName", "Fan"), round(f["Reading"])) for f in th.get("Fans", []) if f.get("Reading") is not None]
+        return {"id": obj, "watts": watts, "psu": [("Load", f"{round(watts)} W" if watts is not None else None), *supplies, *rails], "hw": {**({"temps": temps} if temps else {}), **({"fans": fans} if fans else {})}}
+
+    results = await asyncio.gather(*(one(o, h) for o, h in hosts.items()), return_exceptions=True)
+    failed = [f"{o}: {describe(r)}" for o, r in zip(hosts, results, strict=True) if isinstance(r, BaseException)]
+    good = [r for r in results if not isinstance(r, BaseException)]
+    if not good:
+        raise RuntimeError("no BMC answered · " + " · ".join(failed))
+    return {
+        "power": [{"id": r["id"], "w": round(r["watts"]), "src": "ipmi"} for r in good if r["watts"] is not None],
+        "psu": {r["id"]: r["psu"] for r in good},
+        "hosts_hardware": {r["id"]: r["hw"] for r in good if r["hw"]},
+        **({"warnings": failed} if failed else {}),
+    }
+
+
+async def _nut_list(reader, writer, command: str) -> list[list[str]]:
+    """Send one LIST command to upsd and return its rows, each split into words with quotes removed."""
+    writer.write(command.encode() + b"\n")
+    await writer.drain()
+    rows = []
+    while True:
+        line = (await asyncio.wait_for(reader.readline(), 10)).decode(errors="replace").strip()
+        if not line or line.startswith("ERR"):
+            raise RuntimeError(f"upsd answered {line or 'nothing'!r} to {command!r}")
+        if line.startswith("END LIST"):
+            return rows
+        if not line.startswith("BEGIN LIST"):
+            head, _, quoted = line.partition('"')
+            rows.append([*head.split(), quoted.rstrip('"')])
+
+
+async def _fetch_nut(cfg: dict) -> dict:
+    """Network UPS Tools: asks upsd (port 3493) for every UPS it knows.
+
+    [nut]  host, port = 3493, site = "home"
+    [nut.ups.<ups name>]  site, [nut.ups.<ups name>.powers] "<object id>" = "shutdown group or note"
+    """
+    need(cfg, "host")
+    reader, writer = await asyncio.wait_for(asyncio.open_connection(cfg["host"], int(cfg.get("port", 3493))), cfg.get("timeout", 10))
+    try:
+        names = [(row[1], row[-1]) for row in await _nut_list(reader, writer, "LIST UPS")]
+        variables = {name: {row[2]: row[-1] for row in await _nut_list(reader, writer, f"LIST VAR {name}")} for name, _ in names}
+        writer.write(b"LOGOUT\n")
+    finally:
+        writer.close()
+
+    def num(v: dict, key: str) -> float | None:
+        try:
+            return float(v[key])
+        except (KeyError, ValueError):
+            return None
+
+    units, alerts = [], []
+    for name, desc in names:
+        v, own = variables[name], (cfg.get("ups") or {}).get(name, {})
+        flags = v.get("ups.status", "").split()
+        on_batt, low = "OB" in flags, "LB" in flags
+        batt, load = round(num(v, "battery.charge") or 0), num(v, "ups.load")
+        runtime = round((num(v, "battery.runtime") or 0) / 60)
+        nominal = num(v, "ups.realpower.nominal")
+        watts = num(v, "ups.realpower") or (load * nominal / 100 if load is not None and nominal else None)
+        uid, powers = f"ups-{slug(name)}", own.get("powers") or {}
+        units.append({
+            "id": uid, "name": name, "site": own.get("site", cfg.get("site", "home")), "status": "crit" if on_batt or low else "ok",
+            "sub": " · ".join(x for x in (v.get("ups.mfr"), v.get("ups.model") or desc, f"{nominal:.0f} W" if nominal else None) if x) or "UPS",
+            "batt": batt, "runtime": runtime, "on_battery": on_batt, "load_w": round(watts) if watts is not None else 0,
+            "meters": [("Battery", batt, f"{batt}%", "crit" if batt <= 50 else ("warn" if batt <= 80 else "ok")),
+                       *([("Load", round(load), f"{round(watts)} / {nominal:.0f} W" if watts is not None and nominal else f"{load:.0f}%")] if load is not None else [])],
+            "facts": [("State", "ON BATTERY" if on_batt else ("On line" if "OL" in flags else v.get("ups.status")), "crit" if on_batt else "ok"), ("Runtime", f"{runtime} min" if runtime else None),
+                      ("Input", f"{v['input.voltage']} V" if v.get("input.voltage") else None), ("Output", f"{v['output.voltage']} V" if v.get("output.voltage") else None),
+                      ("Last self-test", v.get("ups.test.result")), ("Battery date", v.get("battery.mfr.date") or v.get("battery.date")), ("Driver", v.get("driver.name"))],
+            "protects": [ref(obj, label) for obj, label in powers.items()],
+            "rel": [],
+            "powered_by": dict(powers), "power_path": dict(powers),
+        })
+        if on_batt:
+            alerts.append({"id": f"nut-{uid}", "sev": "crit", "title": f"{name} on battery · {batt}% · {runtime} min left", "where": name, "when": "now", "obj": uid, "resolved": False, "domain": "Power", "action": "Open UPS"})
+    return {"ups": units, "alerts": alerts}
+
+
+homeassistant = Integration("homeassistant", "Home Assistant", "smart plugs · power · rack temperature", "10 s", _homeassistant, fetch=_fetch_homeassistant)
+ipmi = Integration("ipmi", "IPMI / Redfish", "alexandria BMC · fans · PSU · rails", "30 s", _ipmi, fetch=_fetch_redfish)
+nut = Integration("nut", "NUT · UPS", "2 UPS · load · battery · runtime", "5 s", _nut, fetch=_fetch_nut)

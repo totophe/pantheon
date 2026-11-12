@@ -1,3 +1,7 @@
+import asyncio
+import time
+
+from ..http import client, get, need, slug
 from .base import Integration, item, note
 
 
@@ -13,7 +17,7 @@ def mock(sim):
     M = sim.mem_fixed
     return {
         # Charts, sensors and thermal layout per host (node_exporter, DCGM, smartctl, ipmi_exporter).
-        "hosts": {
+        "hosts_hardware": {
             "olympus": {
                 "charts": [("CPU", 38, 8, "%", 0, 1), ("Memory", 73 if M else 91, 1.5, "%", 90, 2), ("Network", 1.8, 0.6, " Gbps", 0, 3), ("Package temp", 71, 3, " °C", 90, 4)],
                 "temps": [("CPU package", 71, 90, 100), ("P-cores (hottest)", 78, 90, 100), ("E-cores", 66, 90, 100), ("DDR5 SO-DIMM", 54, 75, 85), ("NVMe 1 · local-nvme", 52, 65, 75), ("X710 SFP+", 58, 80, 90)],
@@ -74,4 +78,84 @@ def mock(sim):
     }
 
 
-victoriametrics = Integration("metrics", "VictoriaMetrics", "node_exporter · DCGM · smartctl · cAdvisor", "15 s", mock)
+# ---------- live ----------
+
+#: UI time range → (seconds back, rate window)
+_RANGES = {"live": (1800, "2m"), "1 h": (3600, "5m"), "24 h": (86400, "1h"), "7 d": (604800, "6h")}
+
+
+def _sensor(m: dict) -> str:
+    """A hwmon series' name: its chip without the bus prefix, then the sensor ("coretemp_0 temp1")."""
+    return f"{m.get('chip', '').removeprefix('platform_')} {m.get('sensor', '')}".strip()
+
+
+async def fetch(cfg: dict) -> dict:
+    """VictoriaMetrics (or any Prometheus-compatible store) holding node_exporter, DCGM and smartctl_exporter series.
+
+    [metrics]  url, username / password or token (optional), host_label = "instance", [metrics.hosts] "<label value>" = "<object id>"
+
+    A series belongs to the host named by ``host_label`` (the port is dropped: "olympus:9100" → "olympus").
+    """
+    need(cfg, "url")
+    label, names = cfg.get("host_label", "instance"), cfg.get("hosts", {})
+    kwargs = {"auth": (cfg["username"], cfg["password"])} if cfg.get("username") else ({"headers": {"Authorization": f"Bearer {cfg['token']}"}} if cfg.get("token") else {})
+
+    def host_of(metric: dict) -> str:
+        raw = metric.get(label) or metric.get("Hostname") or metric.get("instance", "")
+        return names.get(raw) or slug(raw.rsplit(":", 1)[0].split(".")[0])
+
+    async with client(cfg, **kwargs) as c:
+        async def instant(q):
+            try:
+                return (await get(c, "/api/v1/query", query=q))["data"]["result"]
+            except Exception:
+                return []  # the exporter behind this query may simply not be installed
+
+        async def series(q, back, step):
+            end = int(time.time())
+            return (await get(c, "/api/v1/query_range", query=q, start=end - back, end=end, step=step))["data"]["result"]
+
+        await get(c, "/api/v1/query", query="1")  # fail loudly here if the store itself is unreachable
+        temp, crit, tmax, fan, gpu, disk = await asyncio.gather(*map(instant, (
+            "node_hwmon_temp_celsius", "node_hwmon_temp_crit_celsius", "node_hwmon_temp_max_celsius", "node_hwmon_fan_rpm",
+            "DCGM_FI_DEV_GPU_TEMP", 'smartctl_device_temperature{temperature_type="current"}')))
+        charts: dict[str, dict[str, list]] = {}
+        for range_, (back, window) in _RANGES.items():
+            queries = [("CPU", "%", 0, f'100 * (1 - avg by ({label}) (rate(node_cpu_seconds_total{{mode="idle"}}[{window}])))'),
+                       ("Memory", "%", 90, "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)")]
+            for t, unit, warn, q in queries:
+                for s in await series(q, back, back // 30):
+                    values = [round(float(v), 2) for _, v in s["values"]]
+                    if values:
+                        charts.setdefault(host_of(s["metric"]), {}).setdefault(range_, []).append({"t": t, "unit": unit, "warn": warn or None, "values": values})
+
+    def key(m):
+        return (host_of(m), m.get("chip"), m.get("sensor"))
+
+    crits = {key(s["metric"]): float(s["value"][1]) for s in crit}
+    maxes = {key(s["metric"]): float(s["value"][1]) for s in tmax}
+    hosts: dict[str, dict] = {h: {"charts": by_range} for h, by_range in charts.items()}
+
+    def hw(h):
+        return hosts.setdefault(h, {})
+
+    for s in temp:
+        m, value = s["metric"], float(s["value"][1])
+        hi = crits.get(key(m)) or 95
+        hw(host_of(m)).setdefault("temps", []).append((_sensor(m), round(value), round(min(maxes.get(key(m)) or hi - 15, hi - 5)), round(hi)))
+    for s in gpu:
+        m = s["metric"]
+        hw(host_of(m)).setdefault("temps", []).append((f"GPU {m.get('gpu', '')}".strip(), round(float(s["value"][1])), 83, 90))
+    for s in disk:
+        m = s["metric"]
+        hw(host_of(m)).setdefault("temps", []).append((f"Disk {m.get('device', '')}".strip(), round(float(s["value"][1])), 45, 55))
+    for s in fan:
+        m = s["metric"]
+        hw(host_of(m)).setdefault("fans", []).append((_sensor(m), round(float(s["value"][1]))))
+    for h in hosts.values():
+        if len(h.get("temps", [])) > 6:
+            h["temps_wide"] = True
+    return {"hosts_hardware": hosts}
+
+
+victoriametrics = Integration("metrics", "VictoriaMetrics", "node_exporter · DCGM · smartctl · cAdvisor", "15 s", mock, fetch=fetch)

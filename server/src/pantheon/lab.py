@@ -1,8 +1,8 @@
-"""What is specific to this lab rather than read from a source.
+"""Topology layouts and scope captions.
 
-The topology is a hand-placed layout: positions, labels and the lines between
-nodes. Scope captions are here for the same reason. Nodes whose object is
-missing from the inventory are left out.
+The demo lab has a hand-placed map: positions, labels and the lines between
+nodes. Real data gets an automatic one: providers, network devices and hosts in
+rows, without lines, because no source reports links yet.
 """
 
 from __future__ import annotations
@@ -11,16 +11,17 @@ from typing import Any
 
 from .inventory import Inventory
 
-SCOPE_LINES = {"all": "All sites · Home lab and Site B", "home": "Home lab · olympus-cluster", "b": "Site B · offsite"}
+SCOPE_LINES = {"home": "Home lab · olympus-cluster", "b": "Site B · offsite"}
 LAYERS = {"Host": "compute", "Network device": "network", "Site": "network", "VLAN": "network", "Provider": "external", "VPS": "external"}
 
 
-def scopes(inv: Inventory) -> list[dict]:
+def scopes(inv: Inventory, demo: bool) -> list[dict]:
     sites = [o for o in inv.objects.values() if o["type"] == "Site"]
     if not sites:
         return [{"id": "all", "label": "All sites", "line": "All sites", "obj": None}]
-    return [{"id": "all", "label": "All sites", "line": SCOPE_LINES["all"], "obj": None}] + [
-        {"id": o["site"], "label": o["name"], "line": SCOPE_LINES.get(o["site"], o["name"]), "obj": o["id"]} for o in sites]
+    names = " and ".join(o["name"] for o in sites)
+    return [{"id": "all", "label": "All sites", "line": f"All sites · {names}", "obj": None}] + [
+        {"id": o["site"], "label": o["name"], "line": SCOPE_LINES.get(o["site"], o["name"]) if demo else o["name"], "obj": o["id"]} for o in sites]
 
 
 def _node(id, kind, x, y, name, sub, w=152, h=136, bars=(), vps=()):
@@ -90,3 +91,41 @@ def topology(inv: Inventory, world: Any, site_b: bool) -> dict:
     if not present:
         lines, pills = [], []
     return {"h": 500 if site_b else 616, "sub": "Site B" if site_b else "Home lab · switch site in the top bar for Site B", "nodes": present, "lines": lines, "pills": pills}
+
+
+def auto_topology(inv: Inventory, scope: str) -> dict:
+    """Rows of what exists: providers with their VPS, then network devices, then hosts. No lines."""
+    O = inv.objects
+    nodes: list[dict] = []
+    y = 24
+
+    def row(items: list[dict], width: int, height: int) -> None:
+        nonlocal y
+        per_row = max(1, 1016 // (width + 16))
+        for i, n in enumerate(items):
+            n.update(x=24 + (i % per_row) * (width + 16), y=y + (i // per_row) * (height + 16), w=width, h=height)
+            nodes.append(n)
+        if items:
+            y += -(-len(items) // per_row) * (height + 16) + 24
+
+    def meters(o: dict) -> list[dict]:
+        for tab in o["tabs"]:
+            for s in tab["sections"]:
+                if s["type"] == "bars":
+                    return [{"l": m["l"].split()[0][:5], "pct": m["pct"], "text": None} for m in s["items"][:2]]
+        return []
+
+    def node(k: str, kind: str, layer: str, **extra) -> dict:
+        o = O[k]
+        return {"id": k, "kind": kind, "name": o["name"], "sub": o["sub"].split(" · ")[0][:28], "bars": [], "vps": [], "layer": layer, **extra}
+
+    if scope in ("all", "home"):
+        providers = []
+        for k in inv.of_types("Provider"):
+            vps = [v for v, o in O.items() if o["prov"] == k]
+            providers.append((node(k, "group" if vps else "net", "external", vps=vps), 36 + 26 * len(vps) if vps else 72))
+        tallest = max((h for _, h in providers), default=72)
+        row([n for n, _ in providers], 196, tallest)
+    row([node(k, "net", "network") for k in inv.of_types("Site", "Network device", scope=scope) if O[k]["type"] != "Site"], 168, 72)
+    row([node(k, "host", "compute", bars=meters(O[k])) for k in inv.of_types("Host", scope=scope)], 152, 136)
+    return {"h": max(y, 160), "sub": "Automatic layout · links between devices are not known yet", "nodes": nodes, "lines": [], "pills": []}

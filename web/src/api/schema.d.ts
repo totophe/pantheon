@@ -85,6 +85,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sources/{id}/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync Source
+         * @description Poll one live source now. How it went shows up in the snapshot's sources.
+         */
+        post: operations["sync_source_api_sources__id__sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/toggles/{group}/{key}": {
         parameters: {
             query?: never;
@@ -722,9 +742,13 @@ export interface components {
              * Health
              * @enum {string}
              */
-            health: "ok" | "warn" | "disconnected";
+            health: "ok" | "warn" | "disconnected" | "error";
             /** Paused */
             paused: boolean;
+            /** Detail */
+            detail: string | null;
+            /** Cansync */
+            canSync: boolean;
         };
         /** StackPart */
         StackPart: {
@@ -1055,6 +1079,35 @@ export interface operations {
             header?: never;
             path: {
                 key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_source_api_sources__id__sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
             };
             cookie?: never;
         };

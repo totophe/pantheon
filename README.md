@@ -9,8 +9,8 @@ browser ──► web (Caddy: static UI, proxies /api) ──► server (FastAPI
 ```
 
 - **`server/`** — Python, FastAPI. Holds one module per integration, merges their datasets
-  into one inventory, and serves it. Every integration currently delivers a mock dataset;
-  none has a live client yet.
+  into one inventory, and serves it. Every integration has a mock dataset; all but one also
+  have a live client (see "Going live").
 - **`web/`** — React + TypeScript (Vite). Renders what the API returns. It knows nothing
   about integrations or whether their data is mock or live.
 
@@ -42,15 +42,47 @@ Environment variables of the server:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `PANTHEON_MOCK` | `all` | Which integrations serve mock data: `all`, `none`, or a comma-separated list of ids such as `proxmox,unifi`. The others are live. |
+| `PANTHEON_MOCK` | `all` | Which integrations serve mock data: `all`, `none`, or a comma-separated list of ids. |
+| `PANTHEON_CONFIG` | `pantheon.toml` | Connection settings of the live integrations. Looked for in the data directory, then the working directory. |
 | `PANTHEON_DATA_DIR` | unset | Directory for the SQLite file with Pantheon's own state. Unset keeps it in memory. The Docker image sets it to `/data`, a volume. |
 
 Integration ids: `proxmox`, `metrics` (VictoriaMetrics), `truenas`, `nut`, `unifi`,
 `sitemanager`, `docker`, `netbox`, `synology`, `homeassistant`, `ipmi`, `ovh`, `quicksrv`,
 `scaleway`, `cloudflare`, `tailscale`, `llm` (Ollama / vLLM), `pihole`, `uptimekuma`.
 
-A live integration with no client delivers nothing, so its part of the inventory is simply
-absent and Data sources shows it as "Not connected". With `PANTHEON_MOCK=none` the app is empty.
+## Going live
+
+**The live clients have only been run against canned answers, never against the real
+systems.** Expect to debug each one.
+
+1. Copy `server/pantheon.example.toml` to `pantheon.toml` and keep the sections you want.
+   An integration with a section is live; the rest keep serving mock data. Secrets can be
+   written as `${NAME}` and supplied through the environment. `pantheon.toml` and `.env` are
+   git-ignored.
+2. Try one source on its own. This prints the dataset it produces, or the error:
+
+   ```bash
+   cd server && uv run python -m pantheon.probe proxmox
+   ```
+
+3. Start the server and open **Settings → Data sources**. Each live source shows how its
+   last poll went, with the error if it failed, and a **Sync now** button. Pausing a live
+   source stops polling it.
+4. Set `PANTHEON_MOCK=none` to see only real data.
+
+Things to know:
+
+- **Ids.** An object's id is its lower-cased name (`Olympus` → `olympus`). Sources describing
+  the same machine must agree on the name, or be given the id where a setting asks for one
+  (Docker hosts, Home Assistant sensors, NUT loads, LLM engines).
+- **Mixing mock and live.** As soon as one integration is live, the hand-made demo pages
+  (topology with links, power insights, overview notes) give way to computed ones, so
+  nothing invented is shown next to real data. Mock datasets still fill in the rest.
+- **Not there yet for live data:** alerts (only a UPS on battery raises one), links on the
+  topology map, power history, firewall rules, backup runs. Statuses use simple thresholds.
+- **No live client:** Quicksrv.io has no API; its VPS would have to come in through
+  node_exporter and `[metrics]`. Redfish is used for BMCs; IPMI-only boards need
+  `ipmi_exporter` and `[metrics]` instead.
 
 ## API
 
@@ -59,6 +91,7 @@ absent and Data sources shows it as "Not connected". With `PANTHEON_MOCK=none` t
 | `GET /api/snapshot?range=24 h` | Everything the UI shows for one time range (`live`, `1 h`, `24 h`, `7 d`) |
 | `GET /api/events` | Server-sent events: one message per change; the UI then fetches a new snapshot |
 | `POST /api/actions/{key}` | Run an action the snapshot offers (live-migrate, run diagnostics, …) |
+| `POST /api/sources/{id}/sync` | Poll one live source now |
 | `POST /api/toggles/{group}/{key}` | Flip one of Pantheon's own flags: `acked`, `silenced`, `off`, `sched`, `notif` |
 | `PUT /api/settings/price` | Electricity tariff |
 | `GET /api/health` | Liveness |
@@ -73,10 +106,12 @@ sources, accepted drift, schedules, notification channels, tariff) is stored in 
 
 | Path | What it is |
 | --- | --- |
-| `server/src/pantheon/integrations/` | One module per integration: metadata, mock dataset, slot for the live client |
+| `server/src/pantheon/integrations/` | One module per integration: metadata, mock dataset, live client |
+| `server/src/pantheon/poller.py`, `http.py`, `probe.py` | Polling of live sources, shared HTTP helpers, the command-line probe |
+| `server/pantheon.example.toml` | Every live integration's settings, documented |
 | `server/src/pantheon/inventory.py` | Merges the datasets into objects with tabs and sections |
-| `server/src/pantheon/views.py` | Power breakdown and overview, computed from the inventory |
-| `server/src/pantheon/lab.py` | What is specific to this lab: the hand-placed topology and scope captions |
+| `server/src/pantheon/views.py` | Power breakdown and overview: hand-made for the demo lab, computed for real data |
+| `server/src/pantheon/lab.py` | Topology: the demo lab's hand-placed map, and the automatic layout for real data |
 | `server/src/pantheon/snapshot.py` | Assembles the API response |
 | `server/src/pantheon/state.py` | Simulated lab, SQLite-backed settings, change notifications |
 | `server/src/pantheon/schema.py` | The API contract (Pydantic models) |
@@ -111,11 +146,13 @@ cd web && npm run api:types
 
 A server test fails if `openapi.json` is out of date.
 
-## Adding a live integration
+## Adding or fixing a live client
 
-Give the integration a `fetch` coroutine in `server/src/pantheon/integrations/` that returns
-the same shape as its `mock`, and leave its id out of `PANTHEON_MOCK`. The server polls it
-on the integration's interval and merges the result; the frontend needs no change.
+Each client is a `fetch(cfg)` coroutine in `server/src/pantheon/integrations/`, next to the
+integration's `mock`. It receives its section of `pantheon.toml` and returns the same shape
+as the mock; fields it cannot know are left out and the UI omits them. A `warnings` list in
+the result marks a poll as partly successful. `server/tests/test_live.py` holds a canned
+answer per system: when a real answer differs, fix the client and update the canned one.
 
 ## Keyboard
 

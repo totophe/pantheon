@@ -8,7 +8,7 @@
  *
  * `self` is the store (src/model/store.ts): `self.state`, `self.setState()`,
  * `self.nav()`, and the calls that change things on the server: `self.act()`,
- * `self.toggle()`, `self.setPrice()`.
+ * `self.toggle()`, `self.setPrice()`, `self.sync()`.
  */
 export function buildView(self) {
     var st = self.state;
@@ -165,12 +165,14 @@ export function buildView(self) {
         }), '720px')] };
       },
       sources: function () {
-        return { title: 'Data sources', desc: 'Everything Pantheon reads from', tables: [table('', ['Source', 'Covers', 'Polls every', 'Data', ''], 'minmax(170px,1.2fr) 2fr 0.7fr 0.7fr 0.6fr', inv.sources.map(function (s) {
-          var warn = s.health === 'warn' && !s.paused, down = s.health === 'disconnected';
-          return { name: s.name, dot: s.paused || down ? MUTE : (warn ? WARN : OK), hasGo: false, noGo: true, go: function () {}, op: s.paused ? '0.55' : '1',
-            cells: [cell(s.covers, warn ? WARN : null), cell(s.paused ? 'paused' : s.sync), cell(down ? 'Not connected' : (s.mode === 'mock' ? 'Mock' : 'Live'), down ? MUTE : null)],
-            actions: [btn(s.paused ? 'Resume' : 'Pause', toggle('off', s.id))] };
-        }), '820px')] };
+        var DOT = { ok: OK, warn: WARN, error: CRIT, disconnected: MUTE };
+        return { title: 'Data sources', desc: 'Everything Pantheon reads from', tables: [table('', ['Source', 'Covers', 'Polls every', 'Data', 'Last poll', ''], 'minmax(170px,1fr) 1.5fr 0.6fr 0.5fr 1.7fr 1fr', inv.sources.map(function (s) {
+          var live = s.mode === 'live', bad = s.health === 'error' || s.health === 'warn';
+          return { name: s.name, dot: s.paused ? MUTE : DOT[s.health], hasGo: false, noGo: true, go: function () {}, op: s.paused ? '0.55' : '1',
+            cells: [cell(s.covers, !live && s.health === 'warn' ? WARN : null), cell(s.paused ? 'paused' : s.sync), cell(live ? 'Live' : 'Mock'),
+              cell(s.detail || '—', live && bad ? DOT[s.health] : (s.detail ? null : MUTE))],
+            actions: (s.canSync ? [btn('Sync now', function () { self.sync(s.id); }, s.health !== 'ok')] : []).concat([btn(s.paused ? 'Resume' : 'Pause', toggle('off', s.id))]) };
+        }), '1040px')] };
       },
       notifications: function () {
         return { title: 'Notifications', desc: 'Where alerts go', tables: [table('', ['Channel', 'Sends', ''], 'minmax(200px,1.4fr) 1fr 0.8fr', inv.notifications.map(function (n) {
@@ -311,7 +313,7 @@ export function buildView(self) {
         isBtn: n.kind !== 'group', isGroup: n.kind === 'group', go: go(n.id), jc: n.kind === 'host' ? 'flex-start' : 'center',
         bars: n.bars.map(function (b) { var c = barColor(b.pct); return { l: b.l, w: Math.min(100, b.pct) + '%', v: b.text || b.pct + '%', c: c, tc: c === OK ? TXT : c }; }),
         bs: s === 'plan' ? 'dashed' : 'solid', bg: s === 'crit' ? '#1F1416' : (s === 'plan' ? '#12161C' : '#161B22'), op: vis ? '1' : '0.22' };
-      if (n.kind === 'group') r.vps = n.vps.filter(function (v) { return O[v]; }).map(function (v) { var vo = O[v]; return { n: v, t: '→ ' + vo.sub.split(' → ')[1], c: stOf(vo.st)[1], go: go(v) }; });
+      if (n.kind === 'group') r.vps = n.vps.filter(function (v) { return O[v]; }).map(function (v) { var vo = O[v]; return { n: vo.name, t: '→ ' + (vo.sub.split(' → ')[1] || '—'), c: stOf(vo.st)[1], go: go(v) }; });
       return r;
     });
 

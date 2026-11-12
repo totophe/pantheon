@@ -176,7 +176,7 @@ h2 { font-size: 15px; font-weight: 600; }
 .topo-group-head { display: flex; align-items: center; gap: 8px; background: transparent; border: 0; padding: 4px 6px; color: var(--text); font-weight: 600; text-align: left; }
 .topo-group-sub { margin-left: auto; font-size: 11px; font-weight: 400; color: var(--muted); }
 .topo-vps { display: flex; align-items: center; gap: 7px; background: transparent; border: 1px solid var(--border-soft); border-radius: 6px; padding: 3px 6px; height: 24px; color: var(--text); font-size: 11px; text-align: left; }
-.topo-vps .mono { font-weight: 500; }
+.topo-vps .mono { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .topo-vps-target { margin-left: auto; color: var(--muted); white-space: nowrap; }
 .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 11px; color: var(--muted); }
 .legend > span { display: flex; align-items: center; gap: 6px; }

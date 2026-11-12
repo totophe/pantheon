@@ -49,5 +49,5 @@ class Integration:
     mock: Callable[[Any], Dataset]
     #: Health of the mock connection.
     health: str = "ok"
-    #: Live client: returns the same shape as ``mock``. Not written yet for any integration.
-    fetch: Callable[[], Awaitable[Dataset]] | None = None
+    #: Live client: given the integration's section of pantheon.toml, returns the same shape as ``mock``.
+    fetch: Callable[[dict], Awaitable[Dataset]] | None = None

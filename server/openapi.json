@@ -124,6 +124,39 @@
         }
       }
     },
+    "/api/sources/{id}/sync": {
+      "post": {
+        "summary": "Sync Source",
+        "description": "Poll one live source now. How it went shows up in the snapshot's sources.",
+        "operationId": "sync_source_api_sources__id__sync_post",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/toggles/{group}/{key}": {
       "post": {
         "summary": "Toggle",
@@ -1998,13 +2031,29 @@
             "enum": [
               "ok",
               "warn",
-              "disconnected"
+              "disconnected",
+              "error"
             ],
             "title": "Health"
           },
           "paused": {
             "type": "boolean",
             "title": "Paused"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "canSync": {
+            "type": "boolean",
+            "title": "Cansync"
           }
         },
         "type": "object",
@@ -2015,7 +2064,9 @@
           "sync",
           "mode",
           "health",
-          "paused"
+          "paused",
+          "detail",
+          "canSync"
         ],
         "title": "Source"
       },

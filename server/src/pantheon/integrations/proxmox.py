@@ -1,10 +1,13 @@
+import asyncio
+
+from ..http import client, gb, get, need, pct, slug, uptime
 from .base import Integration, item, note, ref
 
 
 def _guest(id, kind, node, ip, role, status, meters, cfg, *, name=None, vlan="30", fw=None, copies=None, events=None, services=None, rel=None):
     return {
         "id": id, "name": name, "kind": kind, "node": node, "ip": ip, "role": role, "status": status, "meters": meters, "cfg": cfg,
-        "vlan": vlan,
+        "vlan": vlan, "nic": "virtio · vmbr0",
         "mac": f"BC:24:11:{(len(id) * 7) % 90 + 10}:0F:{len(id) * 3 + 10}",
         "fw": fw or [item("ALLOW in tcp 22 from VLAN 1", "", "", "ok"), item("DROP in * (policy)", "", "", "crit")],
         "copies": copies or [item("Production", "local-nvme", "✓"), item("Nightly vzdump", "alexandria · nexus/backups · 03:00", "✓"), item("Offsite", "Synology · via Atlas → Synology", "✓")],
@@ -110,4 +113,98 @@ def mock(sim):
     }
 
 
-proxmox = Integration("proxmox", "Proxmox VE", "4 nodes · 11 VMs · 16 LXCs · cluster quorum", "2 s", mock)
+# ---------- live ----------
+
+
+def _net0(conf: dict) -> dict:
+    """Parse a guest's first NIC: "virtio=BC:24:..,bridge=vmbr0,tag=30" (VM) or "name=eth0,hwaddr=..,ip=10.0.0.5/24,tag=30" (LXC)."""
+    parts = dict(p.split("=", 1) for p in str(conf.get("net0", "")).split(",") if "=" in p)
+    model = next((k for k in ("virtio", "e1000", "vmxnet3", "rtl8139") if k in parts), None)
+    ip = parts.get("ip", "")
+    return {
+        "nic": " · ".join(x for x in (model or parts.get("type"), parts.get("bridge")) if x) or None,
+        "vlan": parts.get("tag"),
+        "mac": parts.get(model) if model else parts.get("hwaddr"),
+        "ip": ip.split("/")[0] if ip and ip not in ("dhcp", "manual") else None,
+    }
+
+
+async def fetch(cfg: dict) -> dict:
+    """Proxmox VE over its REST API with an API token (PVEAuditor role is enough).
+
+    [proxmox]  url, token_id ("user@realm!name"), token_secret, site = "home", verify_tls = true
+    """
+    need(cfg, "url", "token_id", "token_secret")
+    site = cfg.get("site", "home")
+    auth = {"Authorization": f"PVEAPIToken={cfg['token_id']}={cfg['token_secret']}"}
+    async with client(cfg, cfg["url"].rstrip("/") + "/api2/json", headers=auth) as c:
+        resources = (await get(c, "/cluster/resources"))["data"]
+        cluster = next((x for x in (await get(c, "/cluster/status"))["data"] if x.get("type") == "cluster"), {})
+        raw_nodes = [r for r in resources if r["type"] == "node"]
+        raw_guests = [r for r in resources if r["type"] in ("qemu", "lxc") and not r.get("template")]
+
+        async def node_status(n):
+            try:
+                return (await get(c, f"/nodes/{n['node']}/status"))["data"]
+            except Exception:
+                return {}
+
+        async def guest_config(g):
+            try:
+                return (await get(c, f"/nodes/{g['node']}/{g['type']}/{g['vmid']}/config"))["data"]
+            except Exception:
+                return {}
+
+        statuses = await asyncio.gather(*map(node_status, raw_nodes))
+        configs = await asyncio.gather(*map(guest_config, raw_guests))
+        try:
+            jobs = (await get(c, "/cluster/backup"))["data"]
+        except Exception:
+            jobs = []
+
+    def gid(g):
+        return slug(g.get("name") or f"{g['type']}{g['vmid']}")
+
+    guests = []
+    for g, conf in zip(raw_guests, configs, strict=True):
+        running, is_vm = g.get("status") == "running", g["type"] == "qemu"
+        net = _net0(conf)
+        mem_mb = round(g.get("maxmem", 0) / 1024**2)
+        guests.append({
+            "id": gid(g), "name": g.get("name"), "kind": "VM" if is_vm else "LXC", "node": slug(g["node"]), "status": "ok" if running else "off",
+            "ip": net["ip"], "role": conf.get("description", "").strip().splitlines()[0][:60] if conf.get("description") else "", "vlan": net["vlan"], "mac": net["mac"], "nic": net["nic"],
+            "meters": [("CPU", round(g.get("cpu", 0) * 100)), ("Memory", pct(g.get("mem", 0), g.get("maxmem", 0)), f"{gb(g.get('mem', 0))} / {gb(g.get('maxmem', 0))}"),
+                       *([("Disk", pct(g.get("disk", 0), g.get("maxdisk", 0)))] if g.get("disk") else [])] if running else [("CPU", 0, "stopped", "mute")],
+            "cfg": [("VMID", str(g["vmid"])), ("vCPU" if is_vm else "Cores", str(g.get("maxcpu", ""))), ("Memory", gb(g.get("maxmem", 0))), ("Disk", gb(g.get("maxdisk", 0))),
+                    ("OS", conf.get("ostype")), ("Start at boot", "yes" if conf.get("onboot") else "no"), ("Tags", g.get("tags"))],
+            "events": [item("Running" if running else "Stopped", "Proxmox", uptime(g["uptime"]) if g.get("uptime") else "", "ok" if running else "mute")],
+            # What the hypervisor really gives the guest, to compare with what the CMDB declares.
+            "observed": {"memory_mb": mem_mb, "vcpus": g.get("maxcpu")},
+        })
+
+    nodes = []
+    quorate = cluster.get("quorate")
+    for n, st in zip(raw_nodes, statuses, strict=True):
+        online = n.get("status") == "online"
+        mem = pct(n.get("mem", 0), n.get("maxmem", 0))
+        nid = slug(n["node"])
+        nodes.append({
+            "id": nid, "name": n["node"], "site": site, "status": "crit" if not online else ("warn" if mem >= 90 else "ok"),
+            "sub": " · ".join(x for x in (st.get("cpuinfo", {}).get("model"), cluster.get("name")) if x) or "Proxmox node",
+            "meters": [("CPU", round(n.get("cpu", 0) * 100)), ("Memory", mem, f"{mem}% · {gb(n.get('mem', 0))} / {gb(n.get('maxmem', 0))}"), ("Root disk", pct(n.get("disk", 0), n.get("maxdisk", 0)))] if online else [],
+            "facts": [("CPU", f"{st['cpuinfo']['model']} · {st['cpuinfo'].get('cpus', '?')} threads" if st.get("cpuinfo") else None), ("Memory", gb(n.get("maxmem", 0))),
+                      ("Proxmox", st.get("pveversion")), ("Kernel", st.get("kversion", "").split(" #")[0] or None), ("Cluster", f"{cluster['name']} · {'quorate' if quorate else 'NO QUORUM'}" if cluster else None),
+                      ("Uptime", uptime(n["uptime"]) if n.get("uptime") else None)],
+            "guests": [ref(g["id"]) for g in guests if g["node"] == nid],
+        })
+
+    return {
+        "cluster": cluster.get("name", ""),
+        "nodes": nodes,
+        "guests": guests,
+        "backup_jobs": [{"name": f"vzdump · {j.get('id', 'job')}", "obj": slug(j["node"]) if j.get("node") else (nodes[0]["id"] if nodes else ""), "target": j.get("storage", ""), "schedule": j.get("schedule", ""),
+                         "last": "enabled" if j.get("enabled", 1) else "disabled"} for j in jobs],
+    }
+
+
+proxmox = Integration("proxmox", "Proxmox VE", "4 nodes · 11 VMs · 16 LXCs · cluster quorum", "2 s", mock, fetch=fetch)

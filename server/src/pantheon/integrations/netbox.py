@@ -1,3 +1,4 @@
+from ..http import client, get, need, slug
 from .base import Integration, item, note, ref
 
 
@@ -52,4 +53,57 @@ def mock(sim):
     }
 
 
-netbox = Integration("netbox", "NetBox · CMDB / IPAM", "sites · VLANs · prefixes · declared VMs · assets", "5 min", mock)
+# ---------- live ----------
+
+
+async def fetch(cfg: dict) -> dict:
+    """NetBox over its REST API with a read-only token.
+
+    [netbox]  url, token, owner (optional), [netbox.sites] "<NetBox site slug>" = "<site id>"
+    """
+    need(cfg, "url", "token")
+    sites = cfg.get("sites", {})
+    async with client(cfg, cfg["url"].rstrip("/") + "/api", headers={"Authorization": f"Token {cfg['token']}", "Accept": "application/json"}) as c:
+        devices = await get(c, "/dcim/devices/", limit=1000)
+        vms = await get(c, "/virtualization/virtual-machines/", limit=1000)
+        extra = 0
+        for path in ("/ipam/vlans/", "/ipam/prefixes/", "/ipam/ip-addresses/"):
+            try:
+                extra += (await get(c, path, limit=1, brief=1)).get("count", 0)
+            except Exception:
+                pass
+
+    def val(x, key="name"):
+        return (x or {}).get(key)
+
+    hosts, planned = {}, []
+    for d in devices.get("results", []):
+        if not d.get("name"):
+            continue
+        hid, kind = slug(d["name"]), d.get("device_type") or {}
+        role = val(d.get("role") or d.get("device_role"))
+        ip = val(d.get("primary_ip"), "address")
+        location = " · ".join(x for x in (val(d.get("site")), f"rack {val(d.get('rack'))}" if d.get("rack") else None, f"U{d['position']:g}" if d.get("position") else None) if x)
+        model = " ".join(x for x in (val(kind.get("manufacturer")), kind.get("model")) if x)
+        hosts[hid] = {"cmdb": [("Role", role), ("Site", val(d.get("site"))), ("Primary IP", ip), ("Status", val(d.get("status"), "label"))],
+                      "asset": [("Model", model or None), ("Serial", d.get("serial") or None), ("Asset tag", d.get("asset_tag")), ("Location", location or None)]}
+        if val(d.get("status"), "value") == "planned":
+            planned.append({"id": hid, "name": d["name"], "site": sites.get(val(d.get("site"), "slug") or "", "home"), "status": "plan", "sub": " · ".join(x for x in (role, "planned") if x),
+                            "facts_title": "Declared in NetBox", "facts_wide": True, "facts": [("Model", model or None), ("Role", role), ("Location", location or None)]})
+
+    declared, guests = {}, {}
+    for v in vms.get("results", []):
+        if not v.get("name"):
+            continue
+        gid = slug(v["name"])
+        declared[gid] = {"memory_mb": v.get("memory"), "vcpus": v.get("vcpus")}
+        guests[gid] = {"role": val(v.get("role")), "lifecycle": val(v.get("status"), "label")}
+
+    return {
+        "object_count": str(devices.get("count", 0) + vms.get("count", 0) + extra), "synced": "",
+        **({"owner": cfg["owner"]} if cfg.get("owner") else {}),
+        "hosts": hosts, "planned": planned, "guests": guests, "declared": declared,
+    }
+
+
+netbox = Integration("netbox", "NetBox · CMDB / IPAM", "sites · VLANs · prefixes · declared VMs · assets", "5 min", mock, fetch=fetch)

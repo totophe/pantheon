@@ -1,3 +1,6 @@
+import ipaddress
+
+from ..http import client, get, need, slug, uptime
 from .base import Integration, item, ref
 
 
@@ -49,4 +52,66 @@ def mock(sim):
     }
 
 
-unifi = Integration("unifi", "UniFi Network", "topology · ports · clients · VLANs · WAN", "5 s", mock)
+# ---------- live ----------
+
+_GATEWAYS = ("ugw", "udm", "uxg")
+
+
+async def fetch(cfg: dict) -> dict:
+    """UniFi Network on a UniFi OS console, with an API key created in the console's settings.
+
+    [unifi]  url, api_key, unifi_site = "default", site = "home", verify_tls = true
+    """
+    need(cfg, "url", "api_key")
+    site = cfg.get("site", "home")
+    base = f"{cfg['url'].rstrip('/')}/proxy/network/api/s/{cfg.get('unifi_site', 'default')}"
+    async with client(cfg, base, headers={"X-API-KEY": cfg["api_key"], "Accept": "application/json"}) as c:
+        raw_devices = (await get(c, "/stat/device"))["data"]
+        networks = (await get(c, "/rest/networkconf"))["data"]
+        try:
+            clients = (await get(c, "/stat/sta"))["data"]
+        except Exception:
+            clients = []
+
+    devices, updates, power = [], [], []
+    for d in raw_devices:
+        did = slug(d.get("name") or d.get("mac", "device"))
+        up = d.get("state") == 1
+        stats = d.get("system-stats") or {}
+        ports = d.get("port_table") or []
+        poe = sum(float(p.get("poe_power") or 0) for p in ports)
+        devices.append({
+            "id": did, "name": d.get("name") or d.get("model", "device"), "site": site, "status": "ok" if up else "crit",
+            "sub": " · ".join(x for x in (d.get("model"), d.get("ip")) if x),
+            "meters": [*([("CPU", round(float(stats["cpu"])))] if stats.get("cpu") else []), *([("Memory", round(float(stats["mem"])))] if stats.get("mem") else [])],
+            "facts": [("Model", d.get("model")), ("Address", d.get("ip")), ("Firmware", d.get("version")), ("Clients", str(d["num_sta"]) if "num_sta" in d else None),
+                      ("Ports up", f"{sum(1 for p in ports if p.get('up'))} / {len(ports)}" if ports else None), ("PoE draw", f"{poe:.0f} W" if poe else None),
+                      ("Temperature", f"{d['general_temperature']} °C" if d.get("general_temperature") else None), ("Uptime", uptime(d["uptime"]) if d.get("uptime") else None)],
+            "events": [item("Connected" if up else "Offline", "UniFi", "", "ok" if up else "crit")],
+            "rel": [],
+        })
+        if d.get("upgradable"):
+            updates.append((did, f"Firmware {d.get('upgrade_to_firmware', 'update')}", "UniFi"))
+        if poe >= 1:
+            power.append({"id": did, "w": round(poe), "src": "poe"})
+
+    gateway = next((slug(d.get("name") or d.get("mac", "")) for d in raw_devices if d.get("type") in _GATEWAYS), None)
+    per_network: dict[str, int] = {}
+    for cl in clients:
+        per_network[cl.get("network", "")] = per_network.get(cl.get("network", ""), 0) + 1
+    vlans = []
+    for n in networks:
+        if n.get("purpose") == "wan" or not n.get("ip_subnet"):
+            continue
+        iface = ipaddress.ip_interface(n["ip_subnet"])
+        count = per_network.get(n.get("name", ""), 0)
+        vlans.append({
+            "vid": int(n.get("vlan") or 1), "name": n.get("name", ""), "site": site, "gateway": gateway, "subnet": str(iface.network), "gw": str(iface.ip), "zone": n.get("purpose", ""),
+            "dhcp": f"{n.get('dhcpd_start', '')}–{n.get('dhcpd_stop', '')}" if n.get("dhcpd_enabled") else "off",
+            "members": [item(f"{count} client{'s' if count != 1 else ''}", "connected now", "", "mute")] if count else [],
+            "policy": [],
+        })
+    return {"devices": devices, "vlans": sorted(vlans, key=lambda v: v["vid"]), "updates": updates, "power": power}
+
+
+unifi = Integration("unifi", "UniFi Network", "topology · ports · clients · VLANs · WAN", "5 s", mock, fetch=fetch)

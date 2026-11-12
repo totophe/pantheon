@@ -29,7 +29,8 @@ def _at(seq, i):
 
 
 def kv(t, pairs, wide=False):
-    return {"type": "kv", "t": t, "wide": wide, "items": [{"k": p[0], "v": p[1], "lv": _at(p, 2)} for p in pairs]}
+    """Facts. A pair whose value is None is unknown to the source and left out."""
+    return {"type": "kv", "t": t, "wide": wide, "items": [{"k": p[0], "v": str(p[1]), "lv": _at(p, 2)} for p in pairs if p[1] is not None]}
 
 
 def bars(t, meters):
@@ -53,7 +54,10 @@ def fans(t, rows):
 
 
 def chart(c, speed):
-    """A 31-point series. The mock shapes it from a base value; a live source would return real samples."""
+    """A series. Live sources deliver real samples; the mock shapes 31 points from a base value."""
+    if isinstance(c, dict):
+        values, warn = c["values"], c.get("warn")
+        return {"type": "chart", "t": c["t"], "wide": False, "value": round(values[-1], 1), "unit": c["unit"], "warn": warn, "max": max(warn or 0, max(values)) * 1.15 or 100, "values": values}
     t, base, amp, unit, warn, seed = c
     values = [base + math.sin(i * speed + seed) * amp + ((i * 13 + seed) % 7 - 3) * amp * 0.15 for i in range(30)] + [base]
     return {"type": "chart", "t": t, "wide": False, "value": base, "unit": unit, "warn": warn or None, "max": max(warn or 0, base + amp * 2) * 1.15 or 100, "values": values}
@@ -72,6 +76,8 @@ class Inventory:
     objects: dict[str, dict] = field(default_factory=dict)
     #: object id → id of the UPS that feeds it
     ups_of: dict[str, str] = field(default_factory=dict)
+    #: Declared-vs-observed differences: (object id, field, declared, observed)
+    drift: list[tuple] = field(default_factory=list)
 
     def feed(self, key: str) -> list:
         """Concatenate one cross-cutting feed (alerts, updates, power…) over every dataset."""
@@ -108,12 +114,24 @@ def _obj(inv: Inventory, id, type, ab, name, site, st, sub, tabs, rel, **extra) 
     o = {
         "id": id, "type": type, "ab": ab, "name": name, "site": site, "st": st, "sub": sub,
         "host": None, "prov": None, "ip": None, "needsDiag": False, "table": None, "actions": [],
-        "tabs": [{"name": n, "sections": s} for n, s in tabs.items() if s],
-        "rel": [{"label": label, "items": items} for label, items in rel or []],
+        "tabs": _tabs(tabs),
+        "rel": [{"label": label, "items": items} for label, items in rel or [] if items],
     }
     o.update(extra)
-    inv.objects[id] = o
+    while o["id"] in inv.objects:  # two sources named different things alike: keep both visible
+        o["id"] += "~"
+    inv.objects[o["id"]] = o
     return o
+
+
+def _tabs(tabs: dict[str, list]) -> list[dict]:
+    """Tabs in order, without sections that have nothing in them and without tabs left empty."""
+    out = []
+    for name, sections in tabs.items():
+        sections = [s for s in sections if s.get("items", True)]
+        if sections:
+            out.append({"name": name, "sections": sections})
+    return out
 
 
 def build(data: Datasets, world: Any, accepted: dict[str, bool], range_: str) -> Inventory:
@@ -121,6 +139,7 @@ def build(data: Datasets, world: Any, accepted: dict[str, bool], range_: str) ->
     D = data
     nb = D.get("netbox") or {}
     speed = RANGE_SPEED[range_]
+    inv.drift = list(nb.get("drift", []))
 
     # Power wiring (NUT): which UPS feeds what
     powered_by: dict[str, list] = {}
@@ -146,22 +165,25 @@ def build(data: Datasets, world: Any, accepted: dict[str, bool], range_: str) ->
     for s in (D.get("sitemanager") or {}).get("sites", []):
         t = s["table"]
         _obj(inv, s["id"], "Site", s["ab"], s["name"], s["site"], s["status"], s["sub"], {
-            "Overview": [bars("Site health", s["health"]), kv("Facts", s["facts"]), *map(note, s.get("notes", []))],
-            "Uplinks": [lst("Internet uplinks", s["uplinks"], True)],
-            "Devices": [lst(s["devices_title"], s["devices"], True)],
-        }, s["rel"], table={"gateway": t["gateway"], "internet": t["internet"], "internetLv": t["internet_lv"], "link": t["link"]})
+            "Overview": [bars("Site health", s.get("health", [])), kv("Facts", s.get("facts", [])), *map(note, s.get("notes", []))],
+            "Uplinks": [lst("Internet uplinks", s.get("uplinks", []), True)],
+            "Devices": [lst(s.get("devices_title", "Devices"), s.get("devices", []), True)],
+        }, s.get("rel"), table={"gateway": t["gateway"], "internet": t["internet"], "internetLv": t["internet_lv"], "link": t["link"]})
 
     # Network devices · UniFi Network
     unifi = D.get("unifi") or {}
     for d in unifi.get("devices", []):
-        _obj(inv, d["id"], "Network device", "NET", d["name"], d["site"], "ok", d["sub"], {
-            "Overview": [bars("Load", d["meters"]), kv("Facts", d["facts"])],
-            "Events": [lst("Events", d["events"], True)],
-        }, with_power(d["id"], d["rel"]))
+        _obj(inv, d["id"], "Network device", "NET", d["name"], d["site"], d.get("status", "ok"), d["sub"], {
+            "Overview": [bars("Load", d.get("meters", [])), kv("Facts", d.get("facts", []))],
+            "Events": [lst("Events", d.get("events", []), True)],
+        }, with_power(d["id"], d.get("rel")))
 
     # Hosts · owned by Proxmox, TrueNAS, NetBox (planned) or Synology;
     # enriched by metrics, power, LLM engines and the CMDB
-    telemetry = (D.get("metrics") or {}).get("hosts", {})
+    telemetry: dict[str, dict] = {}
+    for ds in D.values():  # VictoriaMetrics for most hosts, a BMC for some
+        for id, hw in ((ds or {}).get("hosts_hardware") or {}).items():
+            telemetry.setdefault(id, {}).update(hw)
     llm_hosts = (D.get("llm") or {}).get("hosts", {})
 
     def host(h):
@@ -191,7 +213,7 @@ def build(data: Datasets, world: Any, accepted: dict[str, bool], range_: str) ->
                 "text": h["name"] + " runs on wall power by design: at its draw it would empty the UPS in minutes. A power cut means a hard stop, so keep nothing stateful on it."}))
         _obj(inv, id, "Host", "HOST", h["name"], h["site"], h["status"], h["sub"], {
             "Overview": ov,
-            "Metrics": [chart(c, speed) for c in t.get("charts", [])],
+            "Metrics": [chart(c, speed) for c in _charts(t.get("charts"), range_)],
             "Hardware": hw,
             "Guests": [lst("Guests", h["guests"], True)] if h.get("guests") else [],
             "Network": [lst("Interfaces", h["interfaces"], True)] if h.get("interfaces") else [],
@@ -213,9 +235,9 @@ def build(data: Datasets, world: Any, accepted: dict[str, bool], range_: str) ->
     for p in (D.get("truenas") or {}).get("pools", []):
         _obj(inv, p["id"], "Pool", "POOL", p["name"], p["site"], p["status"], p["sub"], {
             "Overview": [bars("Capacity", p["capacity"]), kv("Health", p["health"])],
-            "Datasets": [lst("Datasets", p["datasets"], True)],
-            "Protection": [lst("Copies", p["copies"], True)],
-        }, p["rel"])
+            "Datasets": [lst("Datasets", p.get("datasets", []), True)],
+            "Protection": [lst("Copies", p.get("copies", []), True)],
+        }, p.get("rel"))
 
     # Guests · Proxmox, with containers from the Docker agents and the declared record from NetBox
     containers = (D.get("docker") or {}).get("containers", [])
@@ -225,36 +247,38 @@ def build(data: Datasets, world: Any, accepted: dict[str, bool], range_: str) ->
         id, is_vm, host_o = g["id"], g["kind"] == "VM", inv.objects.get(g["node"])
         ts = routers.get(id)
         meters = g["meters"] + (pihole["meters"] if pihole.get("guest") == id else [])
-        ctrs = g["services"] + [ref(c["id"]) for c in containers if c["guest"] == id]
+        ctrs = g.get("services", []) + [ref(c["id"]) for c in containers if c["guest"] == id]
         tabs = {"Overview": [bars("Resources", meters), kv("Configuration", g["cfg"] + (ts["facts"] if ts else []))]}
         ctr_tab = "Containers" if is_vm else "Services"
         if ctrs:
             tabs[ctr_tab] = [lst("Docker containers" if is_vm else "Containers / services", ctrs, True)]
         elif D.get("docker"):
             tabs[ctr_tab] = [note({"t": "No containers", "tone": None, "action": None, "text": "No Docker runtime in this guest. Metrics come from the Proxmox API and node_exporter."})]
-        tabs["Network"] = [kv("Interface", [("net0", "virtio · vmbr0"), ("VLAN", g["vlan"]), ("Address", g["ip"]), ("MAC", g["mac"])]), lst("Firewall", g["fw"])]
-        tabs["Backups"] = [lst("3-2-1", g["copies"]), lst("Runs", g["runs"])]
+        tabs["Network"] = [kv("Interface", [("net0", g.get("nic")), ("VLAN", g.get("vlan")), ("Address", g.get("ip")), ("MAC", g.get("mac"))]), lst("Firewall", g.get("fw", []))]
+        tabs["Backups"] = [lst("3-2-1", g.get("copies", [])), lst("Runs", g.get("runs", []))]
         if "guests" in nb:
             rec = nb["guests"].get(id, {})
-            diff, ok = rec.get("diff", []), bool(accepted.get(id))
+            diff, ok = rec.get("diff") or _declared_diff(nb.get("declared", {}).get(id), g.get("observed")), bool(accepted.get(id))
+            if "diff" not in rec:
+                inv.drift.extend((id, *d) for d in diff)
             lv = "ok" if ok else "warn"
             rows = [item(d[0], "NetBox: " + (d[2] if ok else d[1]), "observed: " + d[2] + (" ✓" if ok else " ≠"), lv, lv) for d in diff] \
                 or [item("All fields match", "site · host · VLAN · IP · vCPU · memory", "✓")]
             tabs["Asset & CMDB"] = [
                 lst("Declared (NetBox) vs observed", rows, True, ("Accept observed → update NetBox", "accept:" + id) if diff and not ok else None),
-                kv("CMDB record", [("Role", g["role"]), ("Owner", nb["owner"]), ("Lifecycle", "Test" if is_vm and g["status"] == "off" else "Production"), ("Criticality", rec.get("crit", "Low"))]),
+                kv("CMDB record", [("Role", rec.get("role") or g["role"] or None), ("Owner", nb.get("owner")), ("Lifecycle", rec.get("lifecycle", "Test" if is_vm and g["status"] == "off" else "Production")), ("Criticality", rec.get("crit", "Low" if "owner" in nb else None))]),
             ]
-        tabs["Events"] = [lst("Events", g["events"], True)]
-        _obj(inv, id, g["kind"], "VM" if is_vm else "LXC", g["name"] or id, host_o["site"] if host_o else "home", g["status"],
-             f"{g['kind']} · on {host_o['name'] if host_o else g['node']} · {g['ip']} · {g['role']}", tabs,
-             [("Runs on", [ref(g["node"])]), *g["rel"], *(ts["rel"] if ts else [])], host=g["node"], ip=g["ip"])
+        tabs["Events"] = [lst("Events", g.get("events", []), True)]
+        _obj(inv, id, g["kind"], "VM" if is_vm else "LXC", g.get("name") or id, host_o["site"] if host_o else "home", g["status"],
+             " · ".join(x for x in (g["kind"], f"on {host_o['name'] if host_o else g['node']}", g.get("ip"), g.get("role")) if x), tabs,
+             [("Runs on", [ref(g["node"])]), *g.get("rel", []), *(ts["rel"] if ts else [])], host=g["node"], ip=g.get("ip"))
 
     # Containers · Docker agents
     for c in containers:
         _obj(inv, c["id"], "Container", "CTR", c["name"], "home", c["status"], f"{c['image']} · in {c['guest']}", {
-            "Overview": [kv("Container", [("Image", c["image"]), ("State", c["up"], "warn" if c["status"] == "warn" else None), ("Memory", c["mem"]), ("Restart policy", "unless-stopped")]),
-                         bars("Usage", [("CPU", c.get("cpu", 3)), ("Memory vs limit", c.get("memp", 40), c.get("memt"))]), *map(note, c.get("notes", []))],
-            "Logs": [lst("Recent events", c.get("events") or [item("Healthy", "healthcheck", "1 min ago", "ok")], True)],
+            "Overview": [kv("Container", [("Image", c["image"]), ("State", c["up"], "warn" if c["status"] == "warn" else None), ("Memory", c.get("mem")), ("Restart policy", c.get("restart"))]),
+                         bars("Usage", [*([("CPU", c["cpu"])] if "cpu" in c else []), *([("Memory vs limit", c["memp"], c.get("memt"))] if "memp" in c else [])]), *map(note, c.get("notes", []))],
+            "Logs": [lst("Recent events", c.get("events", []), True)],
         }, [("Runs in", [ref(c["guest"])]), *c.get("rel", [])], host=c["guest"])
 
     # Providers and their edge VPS · OVH, Quicksrv.io, Scaleway, Cloudflare
@@ -265,25 +289,24 @@ def build(data: Datasets, world: Any, accepted: dict[str, bool], range_: str) ->
     for P in provs:
         p = P["provider"]
         for v in P["vps"]:
-            crit = v["status"] == "crit"
             tabs = {
-                "Overview": [kv("Tunnel", [("Type", v.get("link", "WireGuard")), ("Last handshake", "14 min ago" if crit else "2 s ago", "crit" if crit else None), ("Lands on", v["lands"]), ("RTT to home", "—" if crit else "11 ms")]),
-                             bars("Resources", [("CPU", v.get("cpu", 6)), ("Memory", v.get("mem", 38))]), *map(note, v.get("notes", []))],
-                "Events": [lst("Events", v.get("events") or [item("Handshake OK", "WireGuard", "continuous", "ok")], True)],
+                "Overview": [kv(v.get("facts_title", "Tunnel"), v.get("facts", [])),
+                             bars("Resources", [*([("CPU", v["cpu"])] if "cpu" in v else []), *([("Memory", v["mem"])] if "mem" in v else [])]), *map(note, v.get("notes", []))],
+                "Events": [lst("Events", v.get("events", []), True)],
             }
             dg = v.get("diagnostics")
             if dg:
                 tabs["Diagnostics"] = _diagnostics(dg, world)
-            _obj(inv, v["id"], "VPS", "VPS", v["id"], "home", v["status"], f"{p['name']} · {v['role']} → {v['lands']}", tabs,
-                 [("Provider", [ref(p["id"])]), ("Tunnels into", v["targets"]), *v.get("rel", [])], prov=p["id"], needsDiag=bool(dg) and not dg["fixed"])
+            _obj(inv, v["id"], "VPS", "VPS", v.get("name", v["id"]), "home", v["status"], f"{p['name']} · {v['role']} → {v['lands']}", tabs,
+                 [("Provider", [ref(p["id"])]), ("Tunnels into", v.get("targets", [])), *v.get("rel", [])], prov=p["id"], needsDiag=bool(dg) and not dg["fixed"])
     for P in provs:
         p = P["provider"]
         if p.get("tunnels"):
-            tabs = {"Overview": [lst("Tunnels", p["tunnels"], True), kv("DNS", p["dns"])]}
+            tabs = {"Overview": [lst("Tunnels", p["tunnels"], True), kv("DNS", p.get("dns", []))]}
         else:
             kids = [k for k, o in inv.objects.items() if o["prov"] == p["id"]]
-            tabs = {"Overview": [lst("VPS", [ref(k, " · ".join(inv.objects[k]["sub"].split(" · ")[1:])) for k in kids], True)], "Billing": [kv("Account", p["billing"])]}
-        inv.objects[p["id"]]["tabs"] = [{"name": n, "sections": s} for n, s in tabs.items()]
+            tabs = {"Overview": [lst("VPS", [ref(k, " · ".join(inv.objects[k]["sub"].split(" · ")[1:])) for k in kids], True)], "Billing": [kv("Account", p.get("billing", []))]}
+        inv.objects[p["id"]]["tabs"] = _tabs(tabs)
 
     # VLANs · UniFi Network, with drift against NetBox
     for v in unifi.get("vlans", []):
@@ -292,8 +315,8 @@ def build(data: Datasets, world: Any, accepted: dict[str, bool], range_: str) ->
             "Overview": [kv("Network", [("Subnet", v["subnet"]), ("Gateway", v.get("gw") or v["subnet"].replace("0/24", "1")), ("DHCP", v.get("dhcp", "static only")), ("Zone", v["zone"])]),
                          *([note(dr["note"])] if dr else [])],
             "Members": [lst("Members", v["members"] + ([dr["member"]] if dr else []), True)],
-            "Policy": [lst("Allowed to reach", v.get("policy") or [item("default deny", "between zones", "", "mute")], True)],
-        }, [("Gateway", [ref(v["gateway"])])])
+            "Policy": [lst("Allowed to reach", v["policy"] if "policy" in v else [item("default deny", "between zones", "", "mute")], True)],
+        }, [("Gateway", [ref(v["gateway"])] if v.get("gateway") else [])])
 
     # Services · declared in NetBox, health from their components
     for s in nb.get("services", []):
@@ -304,7 +327,7 @@ def build(data: Datasets, world: Any, accepted: dict[str, bool], range_: str) ->
 
     # UPS · NUT
     for u in inv.ups:
-        ov = [bars("Battery & load", u["meters"]), kv("Status", u["facts"]), lst("Protected devices", u["protects"])]
+        ov = [bars("Battery & load", u["meters"]), kv("Status", u["facts"]), lst("Protected devices", u.get("protects", []))]
         if u.get("policy"):
             ov.append(lst("Shutdown policy (NUT + Proxmox)", u["policy"]))
         on = u["on_battery"]
@@ -312,6 +335,22 @@ def build(data: Datasets, world: Any, accepted: dict[str, bool], range_: str) ->
              actions=[{"label": lit if on else idle, "key": key, "primary": not on} for idle, lit, key in u.get("actions", [])])
 
     return inv
+
+
+def _charts(charts, range_: str) -> list:
+    """Live sources keep one set of series per time range; the mock has one recipe for all of them."""
+    if isinstance(charts, dict):
+        return charts.get(range_, [])
+    return charts or []
+
+
+def _declared_diff(declared: dict | None, observed: dict | None) -> list[tuple]:
+    """Compare what the CMDB declares for a guest with what the hypervisor reports: (field, declared, observed)."""
+    if not declared or not observed:
+        return []
+    labels = {"memory_mb": ("Memory", "{} MB"), "vcpus": ("vCPU", "{}")}
+    return [(label, fmt.format(declared[k]), fmt.format(observed[k])) for k, (label, fmt) in labels.items()
+            if declared.get(k) is not None and observed.get(k) is not None and float(declared[k]) != float(observed[k])]
 
 
 def _diagnostics(dg: dict, world: Any) -> list[dict]:

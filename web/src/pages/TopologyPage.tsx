@@ -62,12 +62,14 @@ export function TopologyPage({ vm }: { vm: ViewModel }) {
         </div>
       </div>
 
-      <div className="legend">
-        <span><span className="legend-solid" />Physical</span>
-        <span><span className="legend-dash" style={{ borderColor: '#3E6CA8' }} />Edge tunnel</span>
-        <span><span className="legend-dash" style={{ borderColor: '#A371F7' }} />Site Magic</span>
-        <span><span className="legend-dash" style={{ borderColor: '#3FC4B0' }} />Data flow</span>
-      </div>
+      {topo.lines.length > 0 && (
+        <div className="legend">
+          <span><span className="legend-solid" />Physical</span>
+          <span><span className="legend-dash" style={{ borderColor: '#3E6CA8' }} />Edge tunnel</span>
+          <span><span className="legend-dash" style={{ borderColor: '#A371F7' }} />Site Magic</span>
+          <span><span className="legend-dash" style={{ borderColor: '#3FC4B0' }} />Data flow</span>
+        </div>
+      )}
     </div>
   );
 }
